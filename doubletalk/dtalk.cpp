@@ -35,6 +35,7 @@ struct dtalk
 	size_t carry_off = 0;
 	std::deque<dtalk_index_mark> marks;
 	u64 samples_base = 0;              // board-grid samples discarded at boot
+	u64 samples_dropped = 0;           // grid samples pulled/carried but never delivered (dtalk_stop)
 	s64 idle_stable = 0;               // consecutive idle cycles observed
 
 	bool card_busy() const
@@ -45,8 +46,15 @@ struct dtalk
 
 	void drop_pending_audio()
 	{
+		// These grid samples advanced the board's absolute output counter but
+		// are thrown away instead of delivered by dtalk_synth. Track them so
+		// index_events (timestamped in absolute grid samples) can be converted
+		// back into delivered-stream positions - otherwise every mark after a
+		// cancel would fire late by the running total of discarded audio.
 		std::vector<u8> scrap;
 		board.pull_samples(scrap, SAMPLE_RATE);
+		samples_dropped += scrap.size();
+		samples_dropped += carry.size() - carry_off; // pulled-but-undelivered remainder
 		board.index_events().clear();
 		carry.clear();
 		carry_off = 0;
@@ -74,7 +82,10 @@ struct dtalk
 		while (!ev.empty())
 		{
 			u64 pos = u64(ev.front().first) * SAMPLE_RATE / doubletalk_board::CPU_HZ;
-			marks.push_back({ev.front().second, pos > samples_base ? pos - samples_base : 0});
+			// Absolute grid pos -> delivered-stream pos: subtract the boot
+			// discard plus everything dtalk_stop has thrown away since.
+			u64 offset = samples_base + samples_dropped;
+			marks.push_back({ev.front().second, pos > offset ? pos - offset : 0});
 			ev.pop_front();
 		}
 	}
@@ -126,6 +137,7 @@ void dtalk_reset(dtalk *dt)
 	dt->marks.clear();
 	dt->carry.clear();
 	dt->carry_off = 0;
+	dt->samples_dropped = 0;
 	dt->idle_stable = 0;
 	dt->board.reset();
 	dt->boot();

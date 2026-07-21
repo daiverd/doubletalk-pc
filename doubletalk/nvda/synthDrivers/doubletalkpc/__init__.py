@@ -87,16 +87,16 @@ class SynthDriver(SynthDriver):
 	supportedCommands = {IndexCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
-	# nO voice numbers 0-7
+	# nO voice numbers 0-7, names per the DoubleTalk PC/LT manual (Table 1)
 	_voices = {
-		"0": VoiceInfo("0", "Voice 0 (default)"),
-		"1": VoiceInfo("1", "Voice 1"),
-		"2": VoiceInfo("2", "Voice 2"),
-		"3": VoiceInfo("3", "Voice 3"),
-		"4": VoiceInfo("4", "Voice 4"),
-		"5": VoiceInfo("5", "Voice 5"),
-		"6": VoiceInfo("6", "Voice 6"),
-		"7": VoiceInfo("7", "Voice 7"),
+		"0": VoiceInfo("0", "Perfect Paul"),
+		"1": VoiceInfo("1", "Vader"),
+		"2": VoiceInfo("2", "Big Bob"),
+		"3": VoiceInfo("3", "Precise Pete"),
+		"4": VoiceInfo("4", "Ricochet"),
+		"5": VoiceInfo("5", "Biff"),
+		"6": VoiceInfo("6", "Skip"),
+		"7": VoiceInfo("7", "Robo Robert"),
 	}
 
 	@classmethod
@@ -168,11 +168,13 @@ class SynthDriver(SynthDriver):
 	# --- speech ---
 
 	def _settingsPrefix(self):
-		# nS speed 0-9, nP pitch 0-99, nV volume 0-9, nO voice 0-7
+		# nS speed 0-9, nP pitch 0-99, nV volume 0-9, nO voice 0-7.
+		# Voice (nO) MUST come first: the manual notes it loads a preset that
+		# resets pitch/tone/etc., so a trailing O would clobber our nP/nS/nV.
 		s = int(round(self._rate * 9 / 100))
 		p = int(round(self._pitch * 99 / 100))
 		v = int(round(self._volume * 9 / 100))
-		return "\x01%dS\x01%dP\x01%dV\x01%sO" % (s, p, v, self._voice)
+		return "\x01%sO\x01%dS\x01%dP\x01%dV" % (self._voice, s, p, v)
 
 	def speak(self, speechSequence):
 		parts = [self._settingsPrefix()]

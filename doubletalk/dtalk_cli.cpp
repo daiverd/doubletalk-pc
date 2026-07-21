@@ -9,9 +9,11 @@
 #include "dtalk.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <map>
+#include <utility>
 #include <vector>
 
 static std::vector<u8> read_file(const std::string &path)
@@ -176,6 +178,94 @@ int main(int argc, char **argv)
 			std::printf("  delta %6lld cycles (%.1f Hz): %ld times\n",
 				(long long)kv.first, double(doubletalk_board::CPU_HZ) / kv.first, kv.second);
 		return 0;
+	}
+
+	if (cmd == "stoptest")
+	{
+		// Regression for the index-mark drift after a cancel: queue an
+		// utterance with a marker, run partway, dtalk_stop (discards audio
+		// that still advanced the board's absolute sample grid), then speak a
+		// second utterance with a marker and confirm the marker's reported
+		// sample_pos lands within the delivered stream, not beyond its end.
+		dtalk *dt = dtalk_create(rom.data(), rom.size());
+		if (!dt)
+		{
+			std::fprintf(stderr, "dtalk_create failed\n");
+			return 1;
+		}
+		u8 buf[4096];
+
+		// Simulate a screen-reader session: many utterances each cancelled
+		// mid-synthesis. Every cancel discards a little pending audio that
+		// already advanced the board's absolute sample grid, so the drift
+		// between grid and delivered stream accumulates across the session.
+		const char u1[] = "\x01" "0I" " ONE TWO THREE FOUR FIVE SIX SEVEN EIGHT NINE\r";
+		const int CANCELS = 30;
+		size_t drained1 = 0;
+		dtalk_index_mark scrap[64];
+		for (int c = 0; c < CANCELS; c++)
+		{
+			dtalk_queue(dt, u1, sizeof(u1) - 1);
+			drained1 += dtalk_synth(dt, buf, sizeof(buf)); // one chunk, then cancel
+			dtalk_stop(dt);
+			dtalk_read_index_marks(dt, scrap, 64); // stop already cleared these
+		}
+		std::fprintf(stderr, "%d cancelled utterances: delivered %zu samples total\n",
+			CANCELS, drained1);
+
+		// Utterance 2: marker 1 a few words in. Its mark position WITHIN this
+		// utterance must not depend on the preceding cancels.
+		const char u2[] = "EIGHT NINE TEN \x01" "1I" " ELEVEN TWELVE\r";
+		u32 rate = dtalk_sample_rate(dt);
+
+		auto speak_u2 = [&](dtalk *d) -> std::pair<size_t, long long>
+		{
+			dtalk_queue(d, u2, sizeof(u2) - 1);
+			size_t got = 0, n;
+			while ((n = dtalk_synth(d, buf, sizeof(buf))) > 0)
+				got += n;
+			dtalk_index_mark mk[64];
+			size_t nmk = dtalk_read_index_marks(d, mk, 64);
+			return { got, nmk ? (long long)mk[0].sample_pos : -1 };
+		};
+
+		auto [delivered, markPos] = speak_u2(dt);
+		std::fprintf(stderr, "after %d cancels: u2 delivered %zu samples, "
+			"mark 1 at cumulative sample %lld (%.3fs)\n",
+			CANCELS, delivered, markPos, markPos / double(rate));
+
+		// Baseline: same utterance on a fresh instance, no cancels.
+		dtalk *base = dtalk_create(rom.data(), rom.size());
+		auto [baseDelivered, baseMark] = speak_u2(base);
+		dtalk_destroy(base);
+		std::fprintf(stderr, "baseline (no cancels): u2 delivered %zu samples, "
+			"mark 1 at sample %lld (%.3fs)\n",
+			baseDelivered, baseMark, baseMark / double(rate));
+
+		int rc = 0;
+		if (markPos < 0 || baseMark < 0)
+		{
+			std::fprintf(stderr, "  no marks reported!\n");
+			rc = 1;
+		}
+		else
+		{
+			// mark position relative to u2's own start must match the baseline.
+			long long relPos = markPos - (long long)drained1;
+			long long drift = relPos - baseMark;
+			std::fprintf(stderr, "  mark offset into u2: %lld vs baseline %lld -> "
+				"drift %lld samples (%.3fs)\n", relPos, baseMark, drift,
+				drift / double(rate));
+			if (llabs(drift) > 32) // a couple ms of grid-rounding slack
+			{
+				std::fprintf(stderr, "  MARK DRIFT - BUG\n");
+				rc = 1;
+			}
+			else
+				std::fprintf(stderr, "  mark aligned with delivered stream\n");
+		}
+		dtalk_destroy(dt);
+		return rc;
 	}
 
 	std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
