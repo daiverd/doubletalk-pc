@@ -113,23 +113,27 @@ From the manual's spec sheet (matches everything we found independently):
   (25E/F, 29E/F, 2DE/F, 31E/F, 35E/F, 39E/F). Matches the Linux `dtlk.c`
   driver's port list and our hardcoded 0x25E/0x25F choice exactly.
 
-## Open question carried forward: the startup DAC click
+## Resolved: the startup DAC click is genuine hardware behavior
 
 Every single MAME capture shows an identical, deterministic ~100ms
 full-scale transient on the DAC channel at t=0, before any text is even
 sent - same exact sample values every run, clearly not related to content.
 We work around it in `providers/doubletalk.py` by skipping the first 150ms
-before silence-trimming, but we never determined whether it's:
-(a) genuine real-hardware behavior (e.g. a DC-coupled bridge-tied amp's
-power-on transient, which the "DC-coupled" spec above makes at least
-plausible), or
-(b) an artifact specific to how MAME's emulated speaker/DAC device
-initializes on cold boot, unrelated to the real chip.
+before silence-trimming. This was flagged as an open question (genuine
+hardware power-on click vs. a MAME-emulation-specific artifact) but is
+confirmed to be real hardware behavior - the real DoubleTalk card does
+this too on power-on, consistent with the "DC-coupled bridge-tied" output
+spec above (a real power-on transient through a DC-coupled amp is exactly
+what you'd expect).
 
-Worth resolving once the standalone port has its own from-scratch CPU/DAC
-reset behavior to compare against - if it reproduces independently, that's
-real evidence for (a); if it doesn't, (b) was right and no workaround is
-needed at all in the new implementation.
+Implication for the standalone port: this should be *reproduced*, not
+treated as a bug to eliminate - if the from-scratch CPU/DAC reset path
+naturally produces an equivalent click on cold start, that's a sign the
+init sequence is faithful to the real chip, not something to suppress.
+Downstream consumers (e.g. a rusty_tts provider built on the standalone
+core) will still want the same kind of leading-click trim rusty_tts's
+MAME provider already does, since it's not meaningful speech content
+either way.
 
 ## What we did *not* re-derive here (already documented elsewhere)
 
