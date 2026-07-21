@@ -5,8 +5,8 @@
 # the card's original firmware ROM) as an NVDA speech synthesizer.
 #
 # Files expected next to this __init__.py:
-#   dtalk.dll          - built with `make win32` (32-bit, NVDA is a 32-bit
-#                        process)
+#   dtalk64.dll        - `make win64` (NVDA 2025.2+ is a 64-bit process)
+#   dtalk.dll          - `make win32` (older 32-bit NVDA)
 #   doubletalkpc.bin   - the 512KB firmware ROM (proprietary; fetch per
 #                        rusty_tts/scripts/fetch_roms.sh, not distributed
 #                        with the add-on)
@@ -14,11 +14,12 @@
 import ctypes
 import os
 import re
+import struct
 import threading
 import queue
 
+import config
 import nvwave
-import synthDriverHandler
 from synthDriverHandler import SynthDriver, VoiceInfo, synthIndexReached, synthDoneSpeaking
 from speech.commands import IndexCommand
 from logHandler import log
@@ -26,6 +27,10 @@ from logHandler import log
 _DIR = os.path.dirname(__file__)
 
 SAMPLES_PER_CHUNK = 2048
+
+# unsigned 8-bit -> signed 16-bit little-endian, per input byte (audioop was
+# removed in Python 3.13, so precompute the 256 possible 2-byte outputs).
+_U8_TO_S16 = [struct.pack("<h", (b - 128) << 8) for b in range(256)]
 
 
 class _DtalkIndexMark(ctypes.Structure):
@@ -101,12 +106,14 @@ class SynthDriver(SynthDriver):
 
 	def __init__(self):
 		self._dt = _DtalkDLL()
+		# Serializes EVERY ctypes call into the (non-thread-safe) dtalk handle
+		# across the main thread (cancel/terminate) and the synth thread.
+		self._libLock = threading.Lock()
 		self._player = nvwave.WavePlayer(
 			channels=1,
 			samplesPerSec=int(self._dt.sample_rate),
 			bitsPerSample=16,
-			outputDevice=synthDriverHandler._audioOutputDevice
-				if hasattr(synthDriverHandler, "_audioOutputDevice") else None,
+			outputDevice=config.conf["audio"]["outputDevice"],
 		)
 		self._rate = 50
 		self._pitch = 50
@@ -125,7 +132,8 @@ class SynthDriver(SynthDriver):
 		self._queue.put(None)
 		self._thread.join(timeout=5)
 		self._player.close()
-		self._dt.close()
+		with self._libLock:
+			self._dt.close()
 
 	# --- settings ---
 
@@ -188,7 +196,8 @@ class SynthDriver(SynthDriver):
 				self._queue.get_nowait()
 		except queue.Empty:
 			pass
-		self._dt.lib.dtalk_stop(self._dt.handle)
+		with self._libLock:
+			self._dt.lib.dtalk_stop(self._dt.handle)
 		self._markMap.clear()
 		self._player.stop()
 
@@ -202,41 +211,47 @@ class SynthDriver(SynthDriver):
 		h = self._dt.handle
 		buf = ctypes.create_string_buffer(SAMPLES_PER_CHUNK)
 		marks = (_DtalkIndexMark * 16)()
+		# Cumulative dtalk_synth() output position; matches the emulator's own
+		# absolute sample counter (dtalk_stop does not reset it), so index
+		# marker sample_pos values line up across utterances.
+		samplesDone = 0
 		while True:
 			utterance = self._queue.get()
 			if utterance is None:
 				return
-			self._stopping.clear()
-			lib.dtalk_queue(h, utterance, len(utterance))
-			samplesDone = 0
-			pending = []  # (sample_pos, nvda_index) not yet fed past
-			while not self._stopping.is_set():
-				n = lib.dtalk_synth(h, buf, SAMPLES_PER_CHUNK)
-				if n == 0:
-					break
-				nm = lib.dtalk_read_index_marks(h, marks, 16)
-				for i in range(nm):
-					nvdaIndex = self._markMap.pop(marks[i].value, None)
-					if nvdaIndex is not None:
-						pending.append((marks[i].sample_pos, nvdaIndex))
-				# u8 -> s16 for WavePlayer
-				pcm = bytes(n * 2)
-				pcm = bytearray(pcm)
-				raw = buf.raw[:n]
-				for i, b in enumerate(raw):
-					v = (b - 128) << 8
-					pcm[2 * i] = v & 0xff
-					pcm[2 * i + 1] = (v >> 8) & 0xff
-				chunkEnd = samplesDone + n
-				fired = [m for m in pending if m[0] <= chunkEnd]
-				pending = [m for m in pending if m[0] > chunkEnd]
+			try:
+				self._stopping.clear()
+				with self._libLock:
+					lib.dtalk_queue(h, utterance, len(utterance))
+				pending = []  # (sample_pos, nvda_index) not yet fed past
+				while not self._stopping.is_set():
+					with self._libLock:
+						n = lib.dtalk_synth(h, buf, SAMPLES_PER_CHUNK)
+						if n:
+							nm = lib.dtalk_read_index_marks(h, marks, 16)
+							newMarks = [(marks[i].value, marks[i].sample_pos)
+								for i in range(nm)]
+							raw = buf.raw[:n]
+					if n == 0:
+						break
+					for value, samplePos in newMarks:
+						nvdaIndex = self._markMap.pop(value, None)
+						if nvdaIndex is not None:
+							pending.append((samplePos, nvdaIndex))
+					# u8 -> s16 for WavePlayer
+					pcm = b"".join(map(_U8_TO_S16.__getitem__, raw))
+					chunkEnd = samplesDone + n
+					fired = [m for m in pending if m[0] <= chunkEnd]
+					pending = [m for m in pending if m[0] > chunkEnd]
 
-				def onDone(fired=fired):
-					for _, idx in fired:
-						synthIndexReached.notify(synth=self, index=idx)
+					def onDone(fired=fired):
+						for _, idx in fired:
+							synthIndexReached.notify(synth=self, index=idx)
 
-				self._player.feed(bytes(pcm), onDone=onDone if fired else None)
-				samplesDone = chunkEnd
-			if not self._stopping.is_set():
-				self._player.idle()
-				synthDoneSpeaking.notify(synth=self)
+					self._player.feed(pcm, onDone=onDone if fired else None)
+					samplesDone = chunkEnd
+				if not self._stopping.is_set():
+					self._player.idle()
+					synthDoneSpeaking.notify(synth=self)
+			except Exception:
+				log.error("doubletalkpc synth thread", exc_info=True)
