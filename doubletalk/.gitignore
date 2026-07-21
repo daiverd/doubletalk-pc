@@ -1,1 +1,4 @@
 build/
+nvda/synthDrivers/doubletalkpc/dtalk.dll
+nvda/synthDrivers/doubletalkpc/doubletalkpc.bin
+nvda/*.nvda-addon
