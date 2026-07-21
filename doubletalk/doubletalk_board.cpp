@@ -89,6 +89,7 @@ void doubletalk_board::reset()
 	m_mailbox_data = 0;
 	m_mailbox_pending = false;
 	m_dac_events.clear();
+	m_index_events.clear();
 	m_dac_level = 0x80;
 }
 
@@ -114,6 +115,10 @@ u8 doubletalk_board::mailbox_read()
 
 void doubletalk_board::io_write(u16 port, u8 data)
 {
+	static const bool log_io = std::getenv("DTALK_LOG_IO") != nullptr;
+	if (log_io && port != 0x00)
+		std::fprintf(stderr, "[t=%lld] io_write %04x <- %02x\n",
+			(long long)m_machine.now_cycles(), port, data);
 	switch (port)
 	{
 	case 0x00:
@@ -125,8 +130,14 @@ void doubletalk_board::io_write(u16 port, u8 data)
 		// firmware-owned host-visible TTS status byte
 		m_tts_status = data;
 		break;
+	case 0x80:
+		// Index-marker latch: when speech output reaches an embedded
+		// Ctrl-A <n> I marker, the firmware writes the marker number here
+		// (traced empirically in this port; previously "multi-mode board
+		// control latch, unmapped" in the MAME driver).
+		m_index_events.emplace_back(m_machine.now_cycles(), data);
+		break;
 	default:
-		// port 0x80 "multi-mode board control latch" and anything else:
 		// harmless write sink (matches the MAME driver)
 		m_cpu->logerror("io_write: unmapped port %04x <- %02x\n", port, data);
 		break;

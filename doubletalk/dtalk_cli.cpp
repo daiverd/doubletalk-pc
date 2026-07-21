@@ -6,6 +6,7 @@
 //   dtalk_cli <rom> say <text> <out.wav>         - synthesize to 8-bit WAV
 
 #include "doubletalk_board.h"
+#include "dtalk.h"
 
 #include <cstdio>
 #include <fstream>
@@ -105,6 +106,7 @@ int main(int argc, char **argv)
 
 	if (cmd == "say")
 	{
+		// exercised through the public C API (dtalk.h) end to end
 		if (argc < 5)
 		{
 			std::fprintf(stderr, "usage: %s <rom.bin> say <text> <out.wav>\n", argv[0]);
@@ -113,71 +115,37 @@ int main(int argc, char **argv)
 		std::string text = argv[3];
 		std::string out_path = argv[4];
 
-		// Firmware programs timer0 for a 952-cycle period (measured; matches
-		// the ~10.5kHz cadence documented in PORTING.md): 10MHz/952 = 10504Hz.
-		const u32 rate = doubletalk_board::CPU_HZ / 952;
-		std::vector<u8> pcm;
-
-		// Boot until RDY (firmware sets the status byte itself)
-		s64 boot_limit = s64(doubletalk_board::CPU_HZ) * 10;
-		while (!board.rdy() && board.now_cycles() < boot_limit)
-			board.run_cycles(10000);
-		if (!board.rdy())
+		dtalk *dt = dtalk_create(rom.data(), rom.size());
+		if (!dt)
 		{
-			std::fprintf(stderr, "firmware never asserted RDY (status=%02x)\n", board.host_status());
-			print_state(board);
+			std::fprintf(stderr, "dtalk_create failed\n");
 			return 1;
 		}
-		std::fprintf(stderr, "RDY after %lld cycles (%.3fs emulated), status=%02x\n",
-			(long long)board.now_cycles(),
-			double(board.now_cycles()) / doubletalk_board::CPU_HZ, board.host_status());
-		// discard any boot-time audio (e.g. power-on click) before speaking
-		board.pull_samples(pcm, rate);
-		pcm.clear();
+		dtalk_say(dt, text.c_str());
 
-		// send text + CR, RDY-gated like a real host driver
-		std::string payload = text;
-		payload.push_back('\r');
-		for (char ch : payload)
-		{
-			s64 waited = 0;
-			while (!board.rdy() && waited < s64(doubletalk_board::CPU_HZ) * 5)
-				waited += board.run_cycles(1000);
-			if (!board.rdy())
-			{
-				std::fprintf(stderr, "RDY timeout mid-send (status=%02x)\n", board.host_status());
-				print_state(board);
-				return 1;
-			}
-			board.host_write(u8(ch));
-			board.run_cycles(100);
-		}
+		std::vector<u8> pcm;
+		u8 buf[4096];
+		size_t n;
+		while ((n = dtalk_synth(dt, buf, sizeof(buf))) > 0)
+			pcm.insert(pcm.end(), buf, buf + n);
 
-		// run until DAC has been quiet for 0.5s emulated (or hard cap)
-		s64 quiet_cycles = 0;
-		size_t last_events = board.dac_event_count();
-		s64 hard_cap = board.now_cycles() + s64(doubletalk_board::CPU_HZ) * 120;
-		while (quiet_cycles < doubletalk_board::CPU_HZ / 2 && board.now_cycles() < hard_cap)
-		{
-			board.run_cycles(doubletalk_board::CPU_HZ / 100); // 10ms steps
-			if (board.dac_event_count() != last_events)
-			{
-				last_events = board.dac_event_count();
-				quiet_cycles = 0;
-			}
-			else
-				quiet_cycles += doubletalk_board::CPU_HZ / 100;
-		}
+		dtalk_index_mark mk[64];
+		size_t nmk = dtalk_read_index_marks(dt, mk, 64);
+		for (size_t i = 0; i < nmk; i++)
+			std::fprintf(stderr, "index mark %u at sample %llu (%.3fs)\n",
+				mk[i].value, (unsigned long long)mk[i].sample_pos,
+				double(mk[i].sample_pos) / dtalk_sample_rate(dt));
 
-		board.pull_samples(pcm, rate);
+		u32 rate = dtalk_sample_rate(dt);
+		dtalk_destroy(dt);
+
 		if (!write_wav_u8(out_path, pcm, rate))
 		{
 			std::fprintf(stderr, "failed writing %s\n", out_path.c_str());
 			return 1;
 		}
-		std::fprintf(stderr, "wrote %zu samples (%.2fs) to %s, dac_events=%zu\n",
-			pcm.size(), double(pcm.size()) / rate, out_path.c_str(), board.dac_event_count());
-		print_state(board);
+		std::fprintf(stderr, "wrote %zu samples (%.2fs at %uHz) to %s\n",
+			pcm.size(), double(pcm.size()) / rate, rate, out_path.c_str());
 		return 0;
 	}
 

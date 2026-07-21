@@ -83,6 +83,14 @@ public:
 	size_t dac_event_count() const { return m_dac_total_events; }
 	// Raw not-yet-flattened DAC events (diagnostics).
 	const std::deque<std::pair<s64, u8>> &dac_events() const { return m_dac_events; }
+
+	// Index-marker events (cycle, marker number) from firmware port 0x80
+	// writes; consumer drains this.
+	std::deque<std::pair<s64, u8>> &index_events() { return m_index_events; }
+
+	// Little-endian 16-bit read of CPU program space RAM (diagnostics /
+	// firmware-state peeking, e.g. the 0x000F/0x0011 buffer pointers).
+	u16 ram16(u32 addr) const { return u16(m_ram[addr]) | u16(m_ram[addr + 1]) << 8; }
 	// Flatten DAC events up to current emulated time into unsigned 8-bit
 	// PCM at sample_rate_hz (zero-order hold), appending to out.
 	void pull_samples(std::vector<u8> &out, u32 sample_rate_hz);
@@ -112,6 +120,8 @@ private:
 
 	// DAC events not yet flattened into output samples
 	std::deque<std::pair<s64, u8>> m_dac_events;
+	// index-marker events not yet consumed
+	std::deque<std::pair<s64, u8>> m_index_events;
 	size_t m_dac_total_events = 0;
 	u8 m_dac_level = 0x80;          // last value written (ZOH hold level)
 	s64 m_audio_emitted_cycles = 0; // emulated time already covered by pull_samples

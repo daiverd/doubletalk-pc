@@ -1,10 +1,14 @@
 # Porting DoubleTalk PC to standalone C++ - scope assessment and reference
 
-Status: **not started as working code.** This is a reference document extracted
-from MAME's `src/devices/cpu/i86/i86.cpp`/`i86.h`/`i86inline.h`/`i186.cpp`/`i186.h`
-(BSD-3-Clause) to make the actual port faster and lower-risk next time someone
-picks this up. Tasks #8/#9 (CPU core port) are **not complete**; #10/#11/#12
-were not attempted since they depend on a working CPU.
+Status: **done - see `native/retrochip/doubletalk/`.** The port took the
+"vendor the MAME core verbatim + compatibility shim" route rather than the
+hand-transcription this document was bracing for: the five CPU core files
+compile unmodified against `shim/emu.h`, so the transcription-bug failure
+mode described below never applied. Every reference fact in this document
+was validated against the working port (first-HLT checkpoint, RELREG
+behavior, 952-cycle timer cadence, read-triggered INT1 deassert). This
+file remains useful as the map of *why* the pieces are shaped the way they
+are; the shim's own header comments cover the mechanics.
 
 ## Why this turned out to be bigger than the initial estimate
 
