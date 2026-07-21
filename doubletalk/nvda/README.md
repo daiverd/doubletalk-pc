@@ -13,13 +13,13 @@ pass on Windows.
 
 ## Building the add-on
 
-1. Cross-compile the DLL (32-bit — NVDA is a 32-bit process):
+1. Cross-compile the DLLs (64-bit for NVDA 2025.2+, 32-bit for older):
 
-       make -C .. win32          # needs g++-mingw-w64-i686
+       make -C .. windows        # needs g++-mingw-w64-i686 and g++-mingw-w64-x86-64
 
 2. Copy the pieces into the driver directory:
 
-       cp ../build/win32/dtalk.dll synthDrivers/doubletalkpc/
+       cp ../build/win32/dtalk.dll ../build/win64/dtalk64.dll synthDrivers/doubletalkpc/
        cp <rom>/doubletalkpc.bin  synthDrivers/doubletalkpc/
 
    The firmware ROM is proprietary and not distributed here — fetch it per

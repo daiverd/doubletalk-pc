@@ -32,9 +32,14 @@ class _DtalkIndexMark(ctypes.Structure):
 	_fields_ = [("value", ctypes.c_uint8), ("sample_pos", ctypes.c_uint64)]
 
 
+def _dllName():
+	# NVDA 2025.2+ runs as a 64-bit process; earlier versions are 32-bit.
+	return "dtalk64.dll" if ctypes.sizeof(ctypes.c_void_p) == 8 else "dtalk.dll"
+
+
 class _DtalkDLL:
 	def __init__(self):
-		self.lib = ctypes.cdll.LoadLibrary(os.path.join(_DIR, "dtalk.dll"))
+		self.lib = ctypes.cdll.LoadLibrary(os.path.join(_DIR, _dllName()))
 		self.lib.dtalk_create.restype = ctypes.c_void_p
 		self.lib.dtalk_create.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
 		self.lib.dtalk_destroy.argtypes = [ctypes.c_void_p]
@@ -91,7 +96,7 @@ class SynthDriver(SynthDriver):
 
 	@classmethod
 	def check(cls):
-		return os.path.isfile(os.path.join(_DIR, "dtalk.dll")) \
+		return os.path.isfile(os.path.join(_DIR, _dllName())) \
 			and os.path.isfile(os.path.join(_DIR, "doubletalkpc.bin"))
 
 	def __init__(self):

@@ -34,32 +34,26 @@ build/dtalk_cli: dtalk_cli.cpp doubletalk_board.h dtalk.h $(OBJS) | build
 clean:
 	rm -rf build
 
-# 32-bit Windows DLL for the NVDA synth driver (needs g++-mingw-w64-i686).
-# NVDA is a 32-bit process, hence i686.
-MINGW_CXX ?= i686-w64-mingw32-g++
+# Windows DLLs for the NVDA synth driver. NVDA 2025.2+ is a 64-bit
+# process (dtalk64.dll); older NVDA is 32-bit (dtalk.dll) - the driver
+# loads whichever matches its process at runtime. Needs
+# g++-mingw-w64-x86-64 and/or g++-mingw-w64-i686.
 MINGW_FLAGS = -std=c++20 -O2 -Ishim -Imame -Wall -DDTALK_DLL -DDTALK_BUILD
-
-WIN_OBJS = build/win32/emu.o build/win32/i86.o build/win32/i186.o \
-	build/win32/doubletalk_board.o build/win32/dtalk.o
+WIN_SRCS = shim/emu.cpp mame/i86.cpp mame/i186.cpp doubletalk_board.cpp dtalk.cpp
+WIN_DEPS = shim/emu.h dtalk.h doubletalk_board.h $(WIN_SRCS)
 
 win32: build/win32/dtalk.dll
+win64: build/win64/dtalk64.dll
+windows: win32 win64
 
-build/win32:
+build/win32/dtalk.dll: $(WIN_DEPS)
 	mkdir -p build/win32
+	i686-w64-mingw32-g++ $(MINGW_FLAGS) -shared -static-libgcc -static-libstdc++ \
+		-o $@ $(WIN_SRCS) -Wl,--out-implib,build/win32/dtalk.lib
 
-build/win32/emu.o: shim/emu.cpp shim/emu.h | build/win32
-	$(MINGW_CXX) $(MINGW_FLAGS) -c $< -o $@
-build/win32/i86.o: mame/i86.cpp shim/emu.h | build/win32
-	$(MINGW_CXX) $(MINGW_FLAGS) -c $< -o $@
-build/win32/i186.o: mame/i186.cpp shim/emu.h | build/win32
-	$(MINGW_CXX) $(MINGW_FLAGS) -c $< -o $@
-build/win32/doubletalk_board.o: doubletalk_board.cpp doubletalk_board.h shim/emu.h | build/win32
-	$(MINGW_CXX) $(MINGW_FLAGS) -c $< -o $@
-build/win32/dtalk.o: dtalk.cpp dtalk.h doubletalk_board.h shim/emu.h | build/win32
-	$(MINGW_CXX) $(MINGW_FLAGS) -c $< -o $@
+build/win64/dtalk64.dll: $(WIN_DEPS)
+	mkdir -p build/win64
+	x86_64-w64-mingw32-g++ $(MINGW_FLAGS) -shared -static-libgcc -static-libstdc++ \
+		-o $@ $(WIN_SRCS) -Wl,--out-implib,build/win64/dtalk64.lib
 
-build/win32/dtalk.dll: $(WIN_OBJS)
-	$(MINGW_CXX) -shared -static-libgcc -static-libstdc++ -o $@ $(WIN_OBJS) \
-		-Wl,--out-implib,build/win32/dtalk.lib
-
-.PHONY: all clean win32
+.PHONY: all clean win32 win64 windows

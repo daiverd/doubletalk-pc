@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-for f in synthDrivers/doubletalkpc/dtalk.dll synthDrivers/doubletalkpc/doubletalkpc.bin; do
+for f in synthDrivers/doubletalkpc/dtalk.dll synthDrivers/doubletalkpc/dtalk64.dll synthDrivers/doubletalkpc/doubletalkpc.bin; do
     [[ -f "$f" ]] || { echo "missing $f - see README.md" >&2; exit 1; }
 done
 
