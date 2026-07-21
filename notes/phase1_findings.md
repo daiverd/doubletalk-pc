@@ -432,13 +432,85 @@ session has already gone (full host-to-firmware pipeline working, confirmed real
 synthesis engine engagement), this is a natural point to check in on how much further
 to push before audio output is reachable.
 
+## Phase 3 addendum #7 — collaborator (ctoth) root-caused the crash and got real audio working
+After addendum #6 left off (dictionary-decode crash, deep and unclear), collaborator
+`ctoth` picked up the investigation and made the actual breakthrough — full detail is in
+`investigations/doubletalk-audio-path.md` in the `mame-doubletalk` repo, this is a summary.
+
+**The crash was ours, not the firmware's.** The "bad far-call target" from addendum #6
+wasn't a dictionary-decoder bug at all: our own synthetic 1kHz INT0 timer (an engineering
+workaround from addendum #3, invented because we didn't understand the real interrupt
+source) re-entered a firmware copy loop mid-instruction and corrupted a register. Deleting
+that synthetic timer's deassert-side EOI (letting the firmware own its own interrupt
+lifecycle again) made the crash disappear entirely.
+
+**The CPU was misidentified.** Not a generic 80186 — the RC Systems PC/104 hardware
+manual (an upward-compatible derivative) specifies a **10MHz 80C188EB**, a variant with a
+*relocatable* Peripheral Control Block. Boot code writes `0x1095` to the relocation
+register, which correctly decoded moves the peripheral block to physical `0x9500` —
+retroactively explaining several addresses earlier addenda had been treating as ordinary
+RAM. This closes out the "bank-switching" blocker below: it was never bank-switching,
+it was chip-select relocation on a CPU variant we hadn't identified.
+
+ctoth implemented a proper `I80C188EB` CPU subtype directly in MAME's core
+(`src/devices/cpu/i86/i186.cpp`/`.h`, not just the driver file) — a real emulator
+contribution, not a local hack. With the correct CPU model, the firmware's own interrupt
+handling and EOI work naturally, and all of our `set_cpu_state`/forced-priority/forced-
+INSERV workarounds from addenda #3–#4 became unnecessary and were deleted.
+
+**Real audio confirmed.** Port `0x00` turned out to be an unsigned 8-bit PCM DAC output,
+driven by the CPU's own (now-correctly-modeled) timer ISR. Routed to a MAME DAC + speaker
+and recorded to WAV.
+
+I independently verified this rather than just trusting the commit messages: rebuilt from
+the exact committed state, reran the deterministic `HELLO` trace myself (`bad_transfer:
+false`, converged pointers, valid `CS`), and inspected the WAV directly — confirmed a real
+2-channel recording (motherboard speaker / DoubleTalk) with a genuine, bounded speech-
+shaped burst on the DoubleTalk channel only, silent on the other, matching ctoth's
+documented burst timing almost exactly.
+
+**Then I listened to it.** Sent "HELLO" through — clean, clear synthesized speech, no
+garbling. Sent a long multi-sentence passage (opening of the Declaration of Independence,
+503 bytes across two sentences) — this was the first real test of anything beyond a
+single short word, and it also worked: all bytes sent, no crash, buffer fully drained,
+~19 seconds of clear, continuous speech across both sentences.
+
+Two apparent oddities in that longer recording both turned out to be test-harness/host
+artifacts, not card problems, confirmed by direct channel-by-channel inspection:
+- **~3.5s of lead-in silence** in the raw session recording — this is our test script's
+  own startup + cautious per-byte RDY-gated send pacing, not present once the audio is
+  properly trimmed to where real content starts (~0.25s in).
+- **A "beep" mixed into the middle of a word** when listening to the raw two-channel
+  mix — genuinely the *host PC's own motherboard speaker* (confirmed on channel 1, e.g.
+  peaks around 8.7–8.9s in one run, plus a small blip at boot — likely a GLaBIOS/BIOS
+  event), not the DoubleTalk card's audio at all. Channel 1 is silent everywhere the
+  DoubleTalk channel has speech; the "mixing" was purely coincidental timing when both
+  channels get downmixed together by a naive player.
+
+**Regression test added** (`mame-doubletalk` repo, `scripts/run_doubletalk_regression.py`
++ `scripts/doubletalk_regression_declaration.lua`): sends the same long Declaration
+passage and asserts both (a) no crash — `CS` stays `0x8000`, all bytes sent, buffer
+pointers converge — and (b) real audio actually comes out (a sustained, non-trivial-
+amplitude burst on the isolated DoubleTalk channel, not silence). Verified the test
+actually catches each of those failure modes (corrupted CS, stuck send, undrained buffer,
+silent audio) before relying on it, not just that it passes on the happy path. Runs in
+~4 seconds.
+
+**Where this leaves things**: "text in, speech out" — the original Phase 3 goal — is
+achieved and independently verified, for both short and long input. What's not yet
+established is *hardware-accurate* fidelity (real RAM size vs. our 128KB placeholder,
+real CPU clock, LPC port wiring, jumper-selectable base address, Interrogate response,
+comparison against a real card) — see ctoth's `docs/reports/doubletalk-operational-
+assessment.md` for the full remaining roadmap ("Gates 2 onward") if that level of
+accuracy becomes the next goal.
+
 ## Blockers / risks for later phases
 - No blocker on ROM completeness — this looks like a single self-contained image (code +
   both LPC formats' decode logic + dictionary), so I don't currently see evidence we need a
   separate physical chip dump. I'll flag immediately if deeper RE turns up a reference to
   external LPC coefficient ROM content that isn't present in this image.
-- Bank-switching behavior (writes to 0xFFA4/0xFFA8 before the entry far-jump) means a
+- ~~Bank-switching behavior (writes to 0xFFA4/0xFFA8 before the entry far-jump) means a
   correct emulator/MAME driver will need to model whatever chip-select/paging hardware
-  sits behind those ports, not just a flat ROM — this is probably the single biggest
-  unknown for Phase 2/3 and needs more boot-code tracing to pin down before committing to
-  an implementation approach.
+  sits behind those ports, not just a flat ROM.~~ **Resolved (addendum #7): not
+  bank-switching — the CPU is an 80C188EB with a relocatable Peripheral Control Block,
+  and 0xFFA8 is its relocation register (`RELREG`).**
