@@ -32,7 +32,7 @@ constexpr u32 SAMPLE_RATE = doubletalk_board::CPU_HZ / 952; // 10504
 //     high-pass removes the standing DC offset that causes those clicks.
 constexpr double DT_PI = 3.14159265358979323846; // DT_PI is not portable (mingw -std=c++20)
 constexpr double DC_BLOCK_HZ = 20.0;    // one-pole high-pass corner
-constexpr double LPF_HZ = 3000.0;       // reconstruction low-pass corner.
+constexpr double LPF_HZ = 3000.0;       // default reconstruction low-pass corner.
                                         // Chosen by measurement: matching the
                                         // MAME reference's spectral tilt (its
                                         // resampler drops the raw HF-energy
@@ -44,6 +44,10 @@ constexpr double LPF_HZ = 3000.0;       // reconstruction low-pass corner.
                                         // MAME and the real card's spec agree.
 constexpr double HEADROOM_GAIN = 0.5;   // MAME's DAC output route
                                         // (add_route(ALL_OUTPUTS,"mono",0.5))
+// User-selectable low-pass corner bounds (dtalk_set_lowpass_hz). 3000 is the
+// authentic datasheet default; the NVDA driver's "Wide" preset uses 4800.
+constexpr double LPF_HZ_MIN = 500.0;
+constexpr double LPF_HZ_MAX = 5000.0;
 
 // Firmware text-buffer read/write pointers in CPU RAM (same addresses the
 // MAME capture.lua watched): equal <=> input buffer fully consumed.
@@ -72,8 +76,17 @@ struct output_stage
 	output_stage()
 	{
 		r = 1.0 - (2.0 * DT_PI * DC_BLOCK_HZ / double(SAMPLE_RATE));
-		// 2-pole Butterworth low-pass, bilinear transform.
-		const double w = std::tan(DT_PI * LPF_HZ / double(SAMPLE_RATE));
+		set_lowpass(LPF_HZ);
+	}
+
+	// Recompute the 2-pole Butterworth low-pass biquad (bilinear transform)
+	// for a new corner frequency, leaving the filter's sample history (and the
+	// DC-block state) untouched so the swap is glitch-free mid-stream.
+	void set_lowpass(double hz)
+	{
+		if (hz < LPF_HZ_MIN) hz = LPF_HZ_MIN;
+		else if (hz > LPF_HZ_MAX) hz = LPF_HZ_MAX;
+		const double w = std::tan(DT_PI * hz / double(SAMPLE_RATE));
 		const double k = w * w;
 		const double q = std::sqrt(2.0); // Butterworth: 1/Q = sqrt(2)
 		const double norm = 1.0 / (1.0 + q * w + k);
@@ -365,6 +378,14 @@ size_t dtalk_synth16(dtalk *dt, int16_t *out, size_t max_samples)
 	}
 
 	return produced;
+}
+
+void dtalk_set_lowpass_hz(dtalk *dt, uint32_t hz)
+{
+	// 0 restores the datasheet-authentic default; otherwise set_lowpass clamps
+	// to LPF_HZ_MIN..LPF_HZ_MAX. Only the biquad coefficients change; the
+	// filter's sample history is preserved so a mid-stream change is seamless.
+	dt->out16.set_lowpass(hz == 0 ? LPF_HZ : double(hz));
 }
 
 size_t dtalk_read_index_marks(dtalk *dt, dtalk_index_mark *out, size_t max)

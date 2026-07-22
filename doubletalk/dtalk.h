@@ -86,6 +86,26 @@ DTALK_API size_t dtalk_synth(dtalk *dt, uint8_t *out, size_t max_samples);
  * dtalk_synth() path is byte-for-byte unchanged. */
 DTALK_API size_t dtalk_synth16(dtalk *dt, int16_t *out, size_t max_samples);
 
+/* Set the reconstruction low-pass corner (Hz) used by the dtalk_synth16
+ * output stage, recomputing the Butterworth biquad coefficients in place.
+ * Everything else in the output stage (the DC-blocking high-pass, the 0.5
+ * headroom gain, the Direct-Form-I biquad topology) is unchanged; only the
+ * low-pass corner moves.
+ *
+ * The default is 3000 Hz - the RC8650/RC8660 datasheets' own recommended
+ * "3 kHz Low-Pass Filter" output stage, i.e. the authentic card sound, and
+ * the value MAME's resampler spectrally matches. Passing 0 restores that
+ * default. Higher corners (up to a sensible fraction of the ~10.5kHz Nyquist
+ * headroom) trade that authenticity for brightness by letting more of the
+ * DAC's high-frequency content through; the argument is clamped to the
+ * range 500..5000 Hz.
+ *
+ * Safe to call mid-stream: the filter's sample history is preserved, only
+ * the coefficients are swapped, so changing the setting while speaking does
+ * not introduce a discontinuity. Coefficients (and the chosen corner) persist
+ * across dtalk_stop()/dtalk_reset(); those only clear the filter's history. */
+DTALK_API void dtalk_set_lowpass_hz(dtalk *dt, uint32_t hz);
+
 /* Index markers (embedded Ctrl-A <n> I, n = 0-99): each marker reached by
  * the speech output is queued with the absolute output-sample position at
  * which it fired (positions count all samples produced since create/reset,

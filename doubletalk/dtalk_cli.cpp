@@ -4,8 +4,12 @@
 //   dtalk_cli <rom> trace [max_instructions]     - boot trace to stdout
 //   dtalk_cli <rom> boot [cycles]                - run boot, report state
 //   dtalk_cli <rom> say <text> <out.wav>         - synthesize to 8-bit WAV
-//   dtalk_cli <rom> say16 <text> <out.wav>       - synthesize to 16-bit WAV
-//                                                  (modeled output stage)
+//   dtalk_cli <rom> say16 <text> <out.wav> [lowpass_hz]
+//                                                - synthesize to 16-bit WAV
+//                                                  (modeled output stage);
+//                                                  lowpass_hz sets the
+//                                                  reconstruction low-pass
+//                                                  corner (default 3000)
 
 #include "doubletalk_board.h"
 #include "dtalk.h"
@@ -181,11 +185,13 @@ int main(int argc, char **argv)
 		// Same as say, but through the modeled 16-bit output stage.
 		if (argc < 5)
 		{
-			std::fprintf(stderr, "usage: %s <rom.bin> say16 <text> <out.wav>\n", argv[0]);
+			std::fprintf(stderr, "usage: %s <rom.bin> say16 <text> <out.wav> [lowpass_hz]\n", argv[0]);
 			return 2;
 		}
 		std::string text = argv[3];
 		std::string out_path = argv[4];
+		// Optional reconstruction low-pass corner (default 3000 = authentic).
+		u32 lowpass_hz = (argc > 5) ? u32(std::atol(argv[5])) : 0;
 
 		dtalk *dt = dtalk_create(rom.data(), rom.size());
 		if (!dt)
@@ -193,6 +199,8 @@ int main(int argc, char **argv)
 			std::fprintf(stderr, "dtalk_create failed\n");
 			return 1;
 		}
+		if (lowpass_hz)
+			dtalk_set_lowpass_hz(dt, lowpass_hz);
 		dtalk_say(dt, text.c_str());
 
 		std::vector<int16_t> pcm;

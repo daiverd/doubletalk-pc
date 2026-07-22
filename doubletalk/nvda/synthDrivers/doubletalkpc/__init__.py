@@ -19,6 +19,8 @@ import queue
 
 import config
 import nvwave
+from autoSettingsUtils.driverSetting import DriverSetting
+from autoSettingsUtils.utils import StringParameterInfo
 from synthDriverHandler import SynthDriver, VoiceInfo, synthIndexReached, synthDoneSpeaking
 from speech.commands import IndexCommand, PitchCommand
 from logHandler import log
@@ -48,6 +50,7 @@ class _DtalkDLL:
 		self.lib.dtalk_sample_rate.argtypes = [ctypes.c_void_p]
 		self.lib.dtalk_queue.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
 		self.lib.dtalk_stop.argtypes = [ctypes.c_void_p]
+		self.lib.dtalk_set_lowpass_hz.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
 		self.lib.dtalk_active.restype = ctypes.c_int
 		self.lib.dtalk_active.argtypes = [ctypes.c_void_p]
 		self.lib.dtalk_synth.restype = ctypes.c_size_t
@@ -82,9 +85,17 @@ class SynthDriver(SynthDriver):
 		SynthDriver.RateSetting(),
 		SynthDriver.PitchSetting(),
 		SynthDriver.VolumeSetting(),
+		# Reconstruction-filter corner of the modeled output stage: the card's
+		# datasheet-recommended 3kHz (authentic) vs a brighter 4.8kHz.
+		DriverSetting("filter", "&Filter", availableInSettingsRing=True, defaultVal="3000"),
 	)
 	supportedCommands = {IndexCommand, PitchCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
+
+	_filters = {
+		"3000": StringParameterInfo("3000", "Classic (3 kHz)"),
+		"4800": StringParameterInfo("4800", "Wide (4.8 kHz)"),
+	}
 
 	# nO voice numbers 0-7, names per the DoubleTalk PC/LT manual (Table 1)
 	_voices = {
@@ -124,6 +135,7 @@ class SynthDriver(SynthDriver):
 		self._pitch = 50
 		self._volume = 50
 		self._voice = "0"
+		self._filter = "3000"
 		# marker number (0-99, rolling) -> NVDA index value
 		self._markMap = {}
 		self._nextMark = 0
@@ -169,6 +181,19 @@ class SynthDriver(SynthDriver):
 
 	def _set_volume(self, value):
 		self._volume = value
+
+	def _get_availableFilters(self):
+		return self._filters
+
+	def _get_filter(self):
+		return self._filter
+
+	def _set_filter(self, value):
+		if value not in self._filters:
+			return
+		self._filter = value
+		with self._libLock:
+			self._dt.lib.dtalk_set_lowpass_hz(self._dt.handle, int(value))
 
 	# --- speech ---
 
