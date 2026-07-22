@@ -625,10 +625,11 @@ int main(int argc, char **argv)
 	if (cmd == "presetdump")
 	{
 		// DEBUG: for each voice 0-7, apply the voice-select command and dump the
-		// firmware's settings block (DS:0x86..0xaf, copied from ROM CS:0x317 at
-		// boot and rewritten per voice preset). Reveals what each preset loads
-		// for pitch (binary 0x9b / ASCII 0xa2) and the other 0-9 knobs, so the
-		// NVDA driver can reflect real preset values on the sliders (WYSIWYG).
+		// firmware's settings block (DS:0x86..0xaf, copied from ROM at boot and
+		// rewritten per voice preset). Reveals what each preset loads for pitch
+		// (binary 0x9a / ASCII 0xa7-0xa8) and the other 0-9 knobs, so the NVDA
+		// driver can reflect real preset values on the sliders (WYSIWYG).
+		// See "settingsmap" for the empirical byte<->command proof.
 		for (int v = 0; v < 8; v++)
 		{
 			board.reset();
@@ -646,11 +647,101 @@ int main(int argc, char **argv)
 				board.run_cycles(2000);
 			}
 			board.run_cycles(s64(doubletalk_board::CPU_HZ) * 2);
-			std::printf("voice %d: pitch(0x9b)=%u ascii(0xa2)=%u | block 0x86-0xaf:",
-				v, board.ram16(0x9b) & 0xff, board.ram16(0xa2) & 0xff);
+			u32 pitch_ascii = (board.ram16(0xa7) & 0xff) - '0';
+			pitch_ascii = pitch_ascii * 10 + ((board.ram16(0xa8) & 0xff) - '0');
+			std::printf("voice %d: pitch(0x9a bin)=%2u (ascii 0xa7-8=%2u) | block 0x86-0xaf:",
+				v, board.ram16(0x9a) & 0xff, pitch_ascii);
 			for (u32 a = 0x86; a <= 0xaf; a++)
 				std::printf(" %02x", board.ram16(a) & 0xff);
 			std::printf("\n");
+		}
+		return 0;
+	}
+
+	if (cmd == "settingsmap")
+	{
+		// DEBUG: empirically prove which settings-block byte(s) each 0-9 voice-
+		// quality command writes. Method (same rigor as the rate-table probe):
+		// boot fresh at the DEFAULT voice, snapshot the whole block, then send a
+		// single "\x01<val><Letter>" command followed by a short utterance to
+		// force the parser to store it, and diff the block. The byte(s) that
+		// change TO the sent value (in binary and/or as an ASCII digit) are that
+		// command's storage. Two distinct values are sent per command so we can
+		// confirm the byte actually tracks the value rather than coinciding once.
+		//
+		// usage: settingsmap [LETTER v1 v2]   (default: run the full battery)
+		const u32 LO = 0x80, HI = 0xb0;
+
+		auto run_and_snapshot = [&](const std::string &input) {
+			board.reset();
+			s64 boot_limit = s64(doubletalk_board::CPU_HZ) * 10;
+			while (!board.rdy() && board.now_cycles() < boot_limit)
+				board.run_cycles(10000);
+			for (char ch : input) {
+				while (!board.rdy())
+					board.run_cycles(1000);
+				board.host_write(u8(ch));
+				board.run_cycles(2000);
+			}
+			board.run_cycles(s64(doubletalk_board::CPU_HZ) * 2);
+			std::vector<u8> blk;
+			for (u32 a = LO; a <= HI; a++)
+				blk.push_back(u8(board.ram16(a) & 0xff));
+			return blk;
+		};
+
+		// Baseline: default voice 0, no quality command, just an utterance.
+		std::vector<u8> base = run_and_snapshot(" HELLO\r");
+
+		auto probe = [&](char letter, int val) {
+			std::string s = "\x01";
+			s += std::to_string(val);
+			s += letter;
+			s += " HELLO\r";
+			std::vector<u8> t = run_and_snapshot(s);
+			std::printf("  %cx%-2d ->", letter, val);
+			bool any = false;
+			for (size_t i = 0; i < base.size(); i++) {
+				if (base[i] != t[i]) {
+					u32 off = LO + u32(i);
+					int nv = t[i];
+					char nc = (nv >= 32 && nv < 127) ? char(nv) : '.';
+					std::printf(" [0x%02x:%02x->%02x('%c')]", off, base[i], nv, nc);
+					any = true;
+				}
+			}
+			if (!any) std::printf(" (no change)");
+			std::printf("\n");
+		};
+
+		struct CmdSpec { char letter; int v1; int v2; const char *name; };
+		std::vector<CmdSpec> battery = {
+			{ 'A', 7, 2, "Articulation 0-9" },
+			{ 'B', 9, 3, "Punctuation 0-15" },
+			{ 'E', 7, 2, "Expression 0-9" },
+			{ 'F', 7, 2, "Formant freq 0-9" },
+			{ 'P', 77, 23, "Pitch 0-99" },
+			{ 'R', 7, 2, "Reverb 0-9" },
+			{ 'S', 7, 2, "Speed 0-9" },
+			{ 'V', 7, 2, "Volume 0-9" },
+			{ 'X', 2, 0, "Tone 0-2" },
+		};
+
+		if (argc > 5) {
+			// ad-hoc: settingsmap LETTER v1 v2
+			char L = argv[3][0];
+			int a = std::atoi(argv[4]), b = std::atoi(argv[5]);
+			std::printf("baseline block captured (0x%02x-0x%02x); probing %c\n", LO, HI, L);
+			probe(L, a);
+			probe(L, b);
+			return 0;
+		}
+
+		std::printf("baseline block captured (default voice 0). changed bytes per command:\n");
+		for (auto &c : battery) {
+			std::printf("%s:\n", c.name);
+			probe(c.letter, c.v1);
+			probe(c.letter, c.v2);
 		}
 		return 0;
 	}
