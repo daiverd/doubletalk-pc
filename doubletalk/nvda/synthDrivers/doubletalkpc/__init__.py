@@ -14,23 +14,18 @@
 import ctypes
 import os
 import re
-import struct
 import threading
 import queue
 
 import config
 import nvwave
 from synthDriverHandler import SynthDriver, VoiceInfo, synthIndexReached, synthDoneSpeaking
-from speech.commands import IndexCommand
+from speech.commands import IndexCommand, PitchCommand
 from logHandler import log
 
 _DIR = os.path.dirname(__file__)
 
 SAMPLES_PER_CHUNK = 2048
-
-# unsigned 8-bit -> signed 16-bit little-endian, per input byte (audioop was
-# removed in Python 3.13, so precompute the 256 possible 2-byte outputs).
-_U8_TO_S16 = [struct.pack("<h", (b - 128) << 8) for b in range(256)]
 
 
 class _DtalkIndexMark(ctypes.Structure):
@@ -84,7 +79,7 @@ class SynthDriver(SynthDriver):
 		SynthDriver.PitchSetting(),
 		SynthDriver.VolumeSetting(),
 	)
-	supportedCommands = {IndexCommand}
+	supportedCommands = {IndexCommand, PitchCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
 	# nO voice numbers 0-7, names per the DoubleTalk PC/LT manual (Table 1)
@@ -109,15 +104,18 @@ class SynthDriver(SynthDriver):
 		# Serializes EVERY ctypes call into the (non-thread-safe) dtalk handle
 		# across the main thread (cancel/terminate) and the synth thread.
 		self._libLock = threading.Lock()
+		# dtalk_synth emits unsigned 8-bit mono PCM, which is exactly the
+		# WAVE_FORMAT_PCM 8-bit layout WavePlayer wants (8-bit PCM is unsigned
+		# by the WAV convention), so feed its bytes straight through.
 		self._player = nvwave.WavePlayer(
 			channels=1,
 			samplesPerSec=int(self._dt.sample_rate),
-			bitsPerSample=16,
+			bitsPerSample=8,
 			outputDevice=config.conf["audio"]["outputDevice"],
 		)
 		self._rate = 50
 		self._pitch = 50
-		self._volume = 100
+		self._volume = 50
 		self._voice = "0"
 		# marker number (0-99, rolling) -> NVDA index value
 		self._markMap = {}
@@ -167,17 +165,42 @@ class SynthDriver(SynthDriver):
 
 	# --- speech ---
 
-	def _settingsPrefix(self):
+	@staticmethod
+	def _mapPitch(pct):
+		# NVDA pitch 0-100 -> card nP 0-99 (both default in the middle: 50 -> 50).
+		return int(round(pct * 99 / 100))
+
+	@staticmethod
+	def _map0to9(pct):
+		# NVDA 0-100 -> card 0-9. 50 -> 5 (the card's default speed/volume),
+		# 90+ -> 9. Plain rounding would give 4 at 50 (banker's rounding of 4.5),
+		# missing the card default, so scale so 50 lands exactly on 5.
+		return min(9, pct * 10 // 100)
+
+	def _prefix(self, pitchOverride=None):
 		# nS speed 0-9, nP pitch 0-99, nV volume 0-9, nO voice 0-7.
 		# Voice (nO) MUST come first: the manual notes it loads a preset that
-		# resets pitch/tone/etc., so a trailing O would clobber our nP/nS/nV.
-		s = int(round(self._rate * 9 / 100))
-		p = int(round(self._pitch * 99 / 100))
-		v = int(round(self._volume * 9 / 100))
-		return "\x01%sO\x01%dS\x01%dP\x01%dV" % (self._voice, s, p, v)
+		# resets pitch/tone/etc., so a trailing parameter would clobber it.
+		#
+		# Each voice's preset gives it its distinct pitch/tone (that is what
+		# makes the 8 voices actually sound different). NVDA's defaults (all 50)
+		# are the card's own defaults, so at 50 we OMIT the matching absolute
+		# command and let the preset show through; only a slider the user moved
+		# off 50 emits an absolute override. pitchOverride forces an absolute nP
+		# regardless (used for capital-letter pitch changes).
+		parts = ["\x01%sO" % self._voice]
+		if self._rate != 50:
+			parts.append("\x01%dS" % self._map0to9(self._rate))
+		if pitchOverride is not None:
+			parts.append("\x01%dP" % self._mapPitch(pitchOverride))
+		elif self._pitch != 50:
+			parts.append("\x01%dP" % self._mapPitch(self._pitch))
+		if self._volume != 50:
+			parts.append("\x01%dV" % self._map0to9(self._volume))
+		return "".join(parts)
 
 	def speak(self, speechSequence):
-		parts = [self._settingsPrefix()]
+		parts = [self._prefix()]
 		for item in speechSequence:
 			if isinstance(item, str):
 				# printable ASCII only; the firmware treats control bytes
@@ -188,6 +211,20 @@ class SynthDriver(SynthDriver):
 				self._nextMark = (self._nextMark + 1) % 100
 				self._markMap[mark] = item.index
 				parts.append("\x01%dI" % mark)
+			elif isinstance(item, PitchCommand):
+				# NVDA raises the pitch before a capital and resets after.
+				# offset is in NVDA pitch units (0-100); 0 means "back to base".
+				offset = item.offset
+				if offset == 0:
+					# Restore the base state. Re-send the prefix so the nO
+					# reloads the voice preset (the only way to recover the
+					# preset pitch when the base pitch is the default 50 and no
+					# absolute nP was sent) and any non-default rate/pitch/
+					# volume overrides are re-applied.
+					parts.append(self._prefix())
+				else:
+					eff = min(100, max(0, self._pitch + offset))
+					parts.append("\x01%dP" % self._mapPitch(eff))
 		parts.append("\r")
 		self._queue.put("".join(parts).encode("ascii", "replace"))
 
@@ -240,8 +277,7 @@ class SynthDriver(SynthDriver):
 						nvdaIndex = self._markMap.pop(value, None)
 						if nvdaIndex is not None:
 							pending.append((samplePos, nvdaIndex))
-					# u8 -> s16 for WavePlayer
-					pcm = b"".join(map(_U8_TO_S16.__getitem__, raw))
+					# raw is already unsigned 8-bit mono PCM = WavePlayer's format
 					chunkEnd = samplesDone + n
 					fired = [m for m in pending if m[0] <= chunkEnd]
 					pending = [m for m in pending if m[0] > chunkEnd]
@@ -250,7 +286,7 @@ class SynthDriver(SynthDriver):
 						for _, idx in fired:
 							synthIndexReached.notify(synth=self, index=idx)
 
-					self._player.feed(pcm, onDone=onDone if fired else None)
+					self._player.feed(raw, onDone=onDone if fired else None)
 					samplesDone = chunkEnd
 				if not self._stopping.is_set():
 					self._player.idle()
