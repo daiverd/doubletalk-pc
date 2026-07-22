@@ -43,6 +43,25 @@ DTALK_API void dtalk_reset(dtalk *dt);
 
 DTALK_API uint32_t dtalk_sample_rate(const dtalk *dt);
 
+/* Speech-rate boost, for screen-reader users who want speech faster than the
+ * firmware's documented maximum (nS 9). The command interface caps nS at 0-9
+ * (input above 9 wraps mod 10, per the chip family's default "parameter wrap"
+ * behaviour), so a real >9S cannot be sent. Instead this rescales the ROM
+ * speech-rate period table in our private in-RAM firmware copy (never the
+ * on-disk ROM): smaller periods = proportionally faster speech at every nS
+ * value, with pitch unchanged (the table drives frame duration, not F0) and
+ * without touching the parser.
+ *
+ * level 0 = authentic (stock table, the default). levels 1..dtalk_rate_boost_
+ * max() are progressively faster, each a verified-safe operating point (pitch
+ * stable, speech intelligible, no firmware fault at any nS 0-9). Out-of-range
+ * levels are clamped. The setting persists across dtalk_reset() and applies to
+ * the next utterance. Under boost the host still sends ordinary nS 0-9; only
+ * the nS -> real-duration mapping gets faster. */
+DTALK_API int  dtalk_rate_boost_max(void);
+DTALK_API void dtalk_set_rate_boost(dtalk *dt, int level);
+DTALK_API int  dtalk_get_rate_boost(const dtalk *dt);
+
 /* Read the card's host-visible LPC status/data port (ISA base+0). Returns
  * 0x7F when idle. A host-level ISA-port shim can present this alongside the
  * TTS status byte so DOS/Linux screen-reader drivers probe the card the way

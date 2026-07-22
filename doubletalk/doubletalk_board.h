@@ -101,6 +101,17 @@ public:
 	// Little-endian 16-bit read of CPU program space RAM (diagnostics /
 	// firmware-state peeking, e.g. the 0x000F/0x0011 buffer pointers).
 	u16 ram16(u32 addr) const { return u16(m_ram[addr]) | u16(m_ram[addr + 1]) << 8; }
+	// Poke a RAM byte (diagnostics / firmware-state injection).
+	void ram_poke(u32 addr, u8 v) { if (addr < RAM_SIZE) m_ram[addr] = v; }
+	// Read/poke the in-memory ROM copy (diagnostics / in-RAM ROM patching).
+	// addr is a ROM-space offset (0..ROM_SIZE); the firmware sees the patched
+	// bytes as if burned in. Never touches the on-disk file.
+	u8 rom_peek(u32 addr) const { return addr < ROM_SIZE ? m_rom[addr] : 0xff; }
+	void rom_poke(u32 addr, u8 v) { if (addr < ROM_SIZE) m_rom[addr] = v; }
+	// Optional per-RAM-access watch hook (addr, is_write, data). When set,
+	// dt_program_space calls it on every RAM byte access - debug use only,
+	// leave null in production paths.
+	std::function<void(offs_t, bool, u8)> ram_access_hook;
 	// Flatten DAC events up to current emulated time into unsigned 8-bit
 	// PCM at sample_rate_hz (zero-order hold), appending to out.
 	void pull_samples(std::vector<u8> &out, u32 sample_rate_hz);

@@ -61,6 +61,37 @@ constexpr s64 IDLE_SETTLE_CYCLES = doubletalk_board::CPU_HZ * 3 / 20; // 150ms
 
 constexpr s64 RUN_CHUNK_CYCLES = doubletalk_board::CPU_HZ / 100; // 10ms
 
+// ---- rate boost (dtalk_set_rate_boost) -------------------------------------
+// The firmware's speech rate (nS 0-9) is driven by a table of per-frame
+// "period" words in ROM. Empirically (see notes), the speed setting d selects
+// entry (10 + d) of the word table at ROM offset RATE_TABLE_OFF; the value is
+// the frame period - smaller = faster speech, and it does NOT change pitch
+// (verified F0-stable). The firmware's own consumer clamps the table index to
+// [0,22], and the table already extends past the speed-9 slot (idx 19) to
+// even smaller periods (idx 20-22), so shorter periods are values the firmware
+// is built to handle. The parser wraps any nS input > 9 back into 0-9 (a mod,
+// documented as the RC8650 "SAT=0 wrap" behaviour), so >9S cannot be reached
+// through the command interface - hence we rate-boost by rescaling the ROM
+// period table's rate region in our private in-RAM ROM copy (never the file).
+//
+// A boost LEVEL scales the whole rate region (idx 10-22) by a fixed percent so
+// every nS 0-9 the host may still send stays monotonic and intelligible - only
+// the mapping from nS to real duration gets faster. Level 0 is the authentic
+// table. The percents are the verified-safe operating points (see PORTING /
+// rate-boost verification): pitch stays within a couple percent and speech
+// stays intelligible at every speed 0-9 down to level 3; below ~65% the
+// firmware's frame engine floors and speech breaks up, so we do not expose it.
+constexpr u32 RATE_TABLE_OFF = 0x48da;   // ROM offset of the period word table
+constexpr int RATE_REGION_LO = 10;       // first rate-region index (speed 0)
+constexpr int RATE_REGION_HI = 22;       // last (speed-9 slot is 19; 20-22 = extension)
+// level -> percent of stock period. Index by level (0..RATE_BOOST_MAX).
+// 100 = authentic. 88/80 are verified above the firmware's frame-duration
+// floor at every nS 0-9 (below ~76% the fastest speeds saturate/garble - see
+// the rate-boost verification), so both keep duration strictly monotonic in
+// speed and preserve pitch (measured F0-identical across levels).
+constexpr int RATE_BOOST_PCT[] = { 100, 88, 80 };
+constexpr int RATE_BOOST_MAX = 2;
+
 // Modeled analog output stage state (dtalk_synth16 only). Direct-Form-I
 // biquad low-pass in series after a one-pole DC-blocking high-pass.
 struct output_stage
@@ -144,6 +175,43 @@ struct dtalk
 	u64 samples_base = 0;              // board-grid samples discarded at boot
 	u64 samples_dropped = 0;           // grid samples pulled/carried but never delivered (dtalk_stop)
 	s64 idle_stable = 0;               // consecutive idle cycles observed
+	int rate_boost = 0;                // current boost level (0 = authentic)
+	u16 rate_orig[RATE_REGION_HI - RATE_REGION_LO + 1]; // pristine period words
+	bool rate_saved = false;
+
+	// Snapshot the stock ROM period table so boost levels can be re-derived
+	// from the authentic values rather than compounding.
+	void save_rate_table()
+	{
+		for (int i = RATE_REGION_LO; i <= RATE_REGION_HI; i++)
+		{
+			u32 off = RATE_TABLE_OFF + 2u * u32(i);
+			rate_orig[i - RATE_REGION_LO] =
+				u16(board.rom_peek(off)) | u16(board.rom_peek(off + 1)) << 8;
+		}
+		rate_saved = true;
+	}
+
+	// Rescale the in-RAM ROM period table's rate region for the given boost
+	// level (always relative to the saved stock values).
+	void apply_rate_boost(int level)
+	{
+		if (!rate_saved)
+			save_rate_table();
+		if (level < 0) level = 0;
+		if (level > RATE_BOOST_MAX) level = RATE_BOOST_MAX;
+		const int pct = RATE_BOOST_PCT[level];
+		for (int i = RATE_REGION_LO; i <= RATE_REGION_HI; i++)
+		{
+			u32 w = u32(rate_orig[i - RATE_REGION_LO]) * u32(pct) / 100u;
+			if (w < 1) w = 1;
+			if (w > 0xffff) w = 0xffff;
+			u32 off = RATE_TABLE_OFF + 2u * u32(i);
+			board.rom_poke(off, u8(w & 0xff));
+			board.rom_poke(off + 1, u8((w >> 8) & 0xff));
+		}
+		rate_boost = level;
+	}
 
 	bool card_busy() const
 	{
@@ -225,6 +293,7 @@ dtalk *dtalk_create(const void *rom, size_t rom_size)
 		return nullptr;
 	}
 	dt->board.reset();
+	dt->save_rate_table(); // pristine period table, before any boost
 	if (!dt->boot())
 	{
 		delete dt;
@@ -254,6 +323,21 @@ void dtalk_reset(dtalk *dt)
 uint32_t dtalk_sample_rate(const dtalk *)
 {
 	return SAMPLE_RATE;
+}
+
+int dtalk_rate_boost_max(void)
+{
+	return RATE_BOOST_MAX;
+}
+
+void dtalk_set_rate_boost(dtalk *dt, int level)
+{
+	dt->apply_rate_boost(level);
+}
+
+int dtalk_get_rate_boost(const dtalk *dt)
+{
+	return dt->rate_boost;
 }
 
 uint8_t dtalk_lpc_status(dtalk *dt)

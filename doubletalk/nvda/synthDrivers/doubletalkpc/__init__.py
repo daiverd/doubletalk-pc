@@ -51,6 +51,14 @@ class _DtalkDLL:
 		self.lib.dtalk_queue.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
 		self.lib.dtalk_stop.argtypes = [ctypes.c_void_p]
 		self.lib.dtalk_set_lowpass_hz.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+		# Rate boost: rescales the firmware's ROM speech-rate table (in the
+		# emulator's private in-RAM ROM copy) so speech can run faster than the
+		# nS-9 command ceiling, pitch-preserved. Level 0 = authentic.
+		self.lib.dtalk_rate_boost_max.restype = ctypes.c_int
+		self.lib.dtalk_rate_boost_max.argtypes = []
+		self.lib.dtalk_set_rate_boost.argtypes = [ctypes.c_void_p, ctypes.c_int]
+		self.lib.dtalk_get_rate_boost.restype = ctypes.c_int
+		self.lib.dtalk_get_rate_boost.argtypes = [ctypes.c_void_p]
 		self.lib.dtalk_active.restype = ctypes.c_int
 		self.lib.dtalk_active.argtypes = [ctypes.c_void_p]
 		self.lib.dtalk_synth.restype = ctypes.c_size_t
@@ -83,6 +91,11 @@ class SynthDriver(SynthDriver):
 	supportedSettings = (
 		SynthDriver.VoiceSetting(),
 		SynthDriver.RateSetting(),
+		# Faster-than-9S speech for power screen-reader use. OFF = the card's
+		# authentic nS 0-9 range (rate slider maps 0-100 -> nS 0-9). ON rescales
+		# the firmware rate table so the same slider positions run faster
+		# (~1.8x at the top), pitch unchanged. See _set_rateBoost.
+		SynthDriver.RateBoostSetting(),
 		SynthDriver.PitchSetting(),
 		SynthDriver.VolumeSetting(),
 		# Reconstruction-filter corner of the modeled output stage: the card's
@@ -132,6 +145,11 @@ class SynthDriver(SynthDriver):
 			outputDevice=config.conf["audio"]["outputDevice"],
 		)
 		self._rate = 50
+		self._rateBoost = False
+		# The boost level applied when rateBoost is ON: the strongest the DLL
+		# reports as verified-safe (pitch-stable, monotonic, no fault at any
+		# nS 0-9). OFF sends level 0 (authentic table).
+		self._boostOnLevel = int(self._dt.lib.dtalk_rate_boost_max())
 		self._pitch = 50
 		self._volume = 50
 		self._voice = "0"
@@ -169,6 +187,23 @@ class SynthDriver(SynthDriver):
 
 	def _set_rate(self, value):
 		self._rate = value
+
+	def _get_rateBoost(self):
+		return self._rateBoost
+
+	def _set_rateBoost(self, enable):
+		# Boost is applied in the emulator (the ROM rate table is rescaled),
+		# independent of the nS command the prefix emits - so the rate slider ->
+		# nS 0-9 mapping is unchanged and stays monotonic; ON just makes every
+		# nS value (including the preset speed used when the rate slider sits at
+		# its default 50 and no nS is sent) render faster, pitch preserved.
+		enable = bool(enable)
+		if enable == self._rateBoost:
+			return
+		self._rateBoost = enable
+		with self._libLock:
+			self._dt.lib.dtalk_set_rate_boost(
+				self._dt.handle, self._boostOnLevel if enable else 0)
 
 	def _get_pitch(self):
 		return self._pitch

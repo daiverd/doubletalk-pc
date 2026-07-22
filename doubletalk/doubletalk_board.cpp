@@ -16,7 +16,11 @@ public:
 		if (addr == doubletalk_board::MAILBOX_ADDR)
 			return m_board.mailbox_read();
 		if (addr < doubletalk_board::RAM_SIZE)
+		{
+			if (m_board.ram_access_hook)
+				m_board.ram_access_hook(addr, false, m_board.m_ram[addr]);
 			return m_board.m_ram[addr];
+		}
 		if (addr >= doubletalk_board::ROM_BASE)
 			return m_board.m_rom[addr - doubletalk_board::ROM_BASE];
 		return 0;
@@ -33,7 +37,11 @@ public:
 			return;
 		}
 		if (addr < doubletalk_board::RAM_SIZE)
+		{
+			if (m_board.ram_access_hook)
+				m_board.ram_access_hook(addr, true, data);
 			m_board.m_ram[addr] = data;
+		}
 		// ROM and unmapped writes: sink
 	}
 

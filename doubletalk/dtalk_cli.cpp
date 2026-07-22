@@ -10,6 +10,11 @@
 //                                                  lowpass_hz sets the
 //                                                  reconstruction low-pass
 //                                                  corner (default 3000)
+//   dtalk_cli <rom> say16boost <level> <text> <out.wav> [lowpass_hz]
+//                                                - say16 with a rate-boost
+//                                                  level (dtalk_set_rate_boost)
+//   dtalk_cli <rom> booststress [level]          - multi-utterance safety run
+//                                                  at a rate-boost level
 
 #include "doubletalk_board.h"
 #include "dtalk.h"
@@ -222,6 +227,89 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	if (cmd == "booststress")
+	{
+		// SAFETY: one session at max boost - speak several different phrases,
+		// interleave a mid-utterance stop, and confirm the card keeps
+		// producing audio, returns to idle (RDY) between utterances, and never
+		// hangs or faults.
+		int level = (argc > 3) ? std::atoi(argv[3]) : dtalk_rate_boost_max();
+		dtalk *dt = dtalk_create(rom.data(), rom.size());
+		if (!dt) { std::fprintf(stderr, "dtalk_create failed\n"); return 1; }
+		dtalk_set_rate_boost(dt, level);
+		const char *phrases[] = {
+			"\x019S THE FIVE BOXING WIZARDS JUMP QUICKLY",
+			"\x019S PACK MY BOX WITH FIVE DOZEN LIQUOR JUGS",
+			"\x019S HOW VEXINGLY QUICK DAFT ZEBRAS JUMP",
+			"\x019S SPHINX OF BLACK QUARTZ JUDGE MY VOW",
+			"\x019S THE QUICK ONYX GOBLIN JUMPS OVER THE LAZY DWARF",
+		};
+		int rc = 0;
+		u8 buf[4096];
+		for (int i = 0; i < 5; i++)
+		{
+			dtalk_say(dt, phrases[i]);
+			size_t got = 0, n;
+			while ((n = dtalk_synth(dt, buf, sizeof(buf))) > 0)
+				got += n;
+			int idle = (dtalk_active(dt) == 0);
+			std::printf("phrase %d: %zu samples (%.2fs), idle_after=%d, boost=%d\n",
+				i, got, double(got) / dtalk_sample_rate(dt), idle,
+				dtalk_get_rate_boost(dt));
+			if (got == 0) { std::printf("  NO AUDIO - FAIL\n"); rc = 1; }
+			if (!idle) { std::printf("  card did not return to idle - FAIL\n"); rc = 1; }
+			if (i == 2) // cancel mid-stream on the next one to stress the path
+			{
+				dtalk_say(dt, "\x019S THIS UTTERANCE IS CANCELLED PARTWAY");
+				dtalk_synth(dt, buf, sizeof(buf));
+				dtalk_stop(dt);
+				std::printf("  (mid-utterance stop OK, active=%d)\n", dtalk_active(dt));
+			}
+		}
+		std::printf("%s\n", rc ? "STRESS FAIL" : "STRESS PASS");
+		dtalk_destroy(dt);
+		return rc;
+	}
+
+	if (cmd == "say16boost")
+	{
+		// say16 with a rate-boost level applied (dtalk_set_rate_boost).
+		//   dtalk_cli <rom> say16boost <level> <text> <out.wav> [lowpass_hz]
+		if (argc < 6)
+		{
+			std::fprintf(stderr, "usage: %s <rom> say16boost <level> <text> <out.wav> [lowpass_hz]\n", argv[0]);
+			return 2;
+		}
+		int level = std::atoi(argv[3]);
+		std::string text = argv[4];
+		std::string out_path = argv[5];
+		u32 lowpass_hz = (argc > 6) ? u32(std::atol(argv[6])) : 0;
+
+		dtalk *dt = dtalk_create(rom.data(), rom.size());
+		if (!dt) { std::fprintf(stderr, "dtalk_create failed\n"); return 1; }
+		dtalk_set_rate_boost(dt, level);
+		if (lowpass_hz)
+			dtalk_set_lowpass_hz(dt, lowpass_hz);
+		dtalk_say(dt, text.c_str());
+
+		std::vector<int16_t> pcm;
+		int16_t buf[4096];
+		size_t n;
+		while ((n = dtalk_synth16(dt, buf, 4096)) > 0)
+			pcm.insert(pcm.end(), buf, buf + n);
+		u32 rate = dtalk_sample_rate(dt);
+		dtalk_destroy(dt);
+
+		if (!write_wav_s16(out_path, pcm, rate))
+		{
+			std::fprintf(stderr, "failed writing %s\n", out_path.c_str());
+			return 1;
+		}
+		std::fprintf(stderr, "boost=%d wrote %zu samples (%.2fs at %uHz, 16-bit) to %s\n",
+			level, pcm.size(), double(pcm.size()) / rate, rate, out_path.c_str());
+		return 0;
+	}
+
 	if (cmd == "cadence")
 	{
 		// speak a phrase but analyze DAC write intervals instead of audio
@@ -337,6 +425,45 @@ int main(int argc, char **argv)
 		}
 		dtalk_destroy(dt);
 		return rc;
+	}
+
+	if (cmd == "ratewatch")
+	{
+		// DEBUG: watch reads/writes of a RAM byte while speaking, reporting
+		// each accessing instruction's PC with a hit count - handy for finding
+		// the firmware code that produces/consumes a given variable in the
+		// disassembly.  usage: ratewatch [addr] [text]
+		u32 watch = (argc > 3) ? u32(std::strtoul(argv[3], nullptr, 0)) : 0x00a2;
+		std::string text = (argc > 4) ? argv[4] : "\x01" "9S HELLO WORLD";
+		std::map<std::pair<u32, bool>, long> hits; // (pc,is_write) -> count
+		board.cpu().trace_hook = nullptr;
+		u32 last_pc = 0;
+		board.cpu().trace_hook = [&](offs_t pc) { last_pc = board.cpu().phys_pc(); };
+		board.ram_access_hook = [&](offs_t addr, bool is_write, u8 data)
+		{
+			if (addr == watch)
+				hits[{ last_pc, is_write }]++;
+		};
+		s64 boot_limit = s64(doubletalk_board::CPU_HZ) * 10;
+		while (!board.rdy() && board.now_cycles() < boot_limit)
+			board.run_cycles(10000);
+		std::string payload = text;
+		payload.push_back('\r');
+		for (char ch : payload)
+		{
+			while (!board.rdy())
+				board.run_cycles(1000);
+			board.host_write(u8(ch));
+			board.run_cycles(2000);
+		}
+		board.run_cycles(s64(doubletalk_board::CPU_HZ) * 3);
+		board.ram_access_hook = nullptr;
+		board.cpu().trace_hook = nullptr;
+		std::printf("accesses to %04x:\n", watch);
+		for (auto &kv : hits)
+			std::printf("  pc=%05x %s  x%ld\n", kv.first.first,
+				kv.first.second ? "WRITE" : "READ ", kv.second);
+		return 0;
 	}
 
 	std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
