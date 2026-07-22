@@ -24,7 +24,7 @@ import queue
 
 import config
 import nvwave
-from autoSettingsUtils.driverSetting import DriverSetting
+from autoSettingsUtils.driverSetting import DriverSetting, NumericDriverSetting
 from autoSettingsUtils.utils import StringParameterInfo
 from synthDriverHandler import SynthDriver, VoiceInfo, synthIndexReached, synthDoneSpeaking
 from speech.commands import IndexCommand, PitchCommand
@@ -95,17 +95,42 @@ class SynthDriver(SynthDriver):
 
 	supportedSettings = (
 		SynthDriver.VoiceSetting(),
-		SynthDriver.RateSetting(),
+		# The card's nS speed is natively 0-9, so give the 0-100 slider a coarse
+		# minStep=10: each arrow-key press moves one real card step (11 stops ->
+		# card 0-9, top two both 9) instead of landing in dead zones where many
+		# slider positions collapse to the same nS value. 50% stays the
+		# omit-at-default midpoint (-> nS 5, the card default).
+		SynthDriver.RateSetting(minStep=10),
 		# Faster-than-9S speech for power screen-reader use. OFF = the card's
 		# authentic nS 0-9 range (rate slider maps 0-100 -> nS 0-9). ON rescales
 		# the firmware rate table so the same slider positions run faster
 		# (~1.8x at the top), pitch unchanged. See _set_rateBoost.
 		SynthDriver.RateBoostSetting(),
 		SynthDriver.PitchSetting(),
-		SynthDriver.VolumeSetting(),
+		# nV volume is also 0-9; same coarse step so each press = one card step.
+		SynthDriver.VolumeSetting(minStep=10),
 		# Reconstruction-filter corner of the modeled output stage: the card's
 		# datasheet-recommended 3kHz (authentic) vs a brighter 4.8kHz.
 		DriverSetting("filter", "&Filter", availableInSettingsRing=True, defaultVal="3000"),
+		# Voice-quality knobs from the DoubleTalk PC/LT manual (Table 8). All are
+		# native 0-9 (except tone, 0-2), presented as 0-100 sliders with the same
+		# coarse minStep=10 as rate/volume so each step = one card value. Each is
+		# emitted in the utterance prefix only when moved off the card default, so
+		# voice presets and authentic defaults show through (see _prefix).
+		# Tone (nX) is a 3-way (bass/normal/treble) so it is a combo, like Filter.
+		DriverSetting("tone", "&Tone", availableInSettingsRing=True, defaultVal="1"),
+		# nA articulation 0-9, default 5A. Low = slurred, high = choppy.
+		NumericDriverSetting("articulation", "&Articulation",
+			availableInSettingsRing=True, defaultVal=50, minStep=10),
+		# nE expression (intonation) 0-9, default 5E. 0 = monotone, 9 = animated.
+		NumericDriverSetting("expression", "&Expression",
+			availableInSettingsRing=True, defaultVal=50, minStep=10),
+		# nF formant frequency 0-9, default 5F. Shifts overall vocal-tract voicing.
+		NumericDriverSetting("formant", "&Formant frequency",
+			availableInSettingsRing=True, defaultVal=50, minStep=10),
+		# nR reverb 0-9, default 0R (none). Higher = more reverb delay/effect.
+		NumericDriverSetting("reverb", "Re&verb",
+			availableInSettingsRing=True, defaultVal=0, minStep=10),
 	)
 	supportedCommands = {IndexCommand, PitchCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
@@ -113,6 +138,14 @@ class SynthDriver(SynthDriver):
 	_filters = {
 		"3000": StringParameterInfo("3000", "Classic (3 kHz)"),
 		"4800": StringParameterInfo("4800", "Wide (4.8 kHz)"),
+	}
+
+	# nX tone: bass (0X), normal (1X, default), treble (2X) - like a stereo's
+	# bass/treble controls (manual Table 8; Tone section).
+	_tones = {
+		"0": StringParameterInfo("0", "Bass"),
+		"1": StringParameterInfo("1", "Normal"),
+		"2": StringParameterInfo("2", "Treble"),
 	}
 
 	# nO voice numbers 0-7, names per the DoubleTalk PC/LT manual (Table 1)
@@ -159,6 +192,16 @@ class SynthDriver(SynthDriver):
 		self._volume = 50
 		self._voice = "0"
 		self._filter = "3000"
+		# Voice-quality settings, stored as their 0-100 slider value (tone as its
+		# card string). Defaults are the slider positions that map to the card's
+		# own defaults, so at these values _prefix emits nothing and the card /
+		# voice-preset defaults show through: articulation/expression/formant 50
+		# -> card 5, reverb 0 -> card 0, tone "1" -> normal.
+		self._tone = "1"
+		self._articulation = 50
+		self._expression = 50
+		self._formant = 50
+		self._reverb = 0
 		# marker number (0-99, rolling) -> NVDA index value
 		self._markMap = {}
 		self._nextMark = 0
@@ -235,6 +278,40 @@ class SynthDriver(SynthDriver):
 		with self._libLock:
 			self._dt.lib.dtalk_set_lowpass_hz(self._dt.handle, int(value))
 
+	def _get_availableTones(self):
+		return self._tones
+
+	def _get_tone(self):
+		return self._tone
+
+	def _set_tone(self, value):
+		if value in self._tones:
+			self._tone = value
+
+	def _get_articulation(self):
+		return self._articulation
+
+	def _set_articulation(self, value):
+		self._articulation = value
+
+	def _get_expression(self):
+		return self._expression
+
+	def _set_expression(self, value):
+		self._expression = value
+
+	def _get_formant(self):
+		return self._formant
+
+	def _set_formant(self, value):
+		self._formant = value
+
+	def _get_reverb(self):
+		return self._reverb
+
+	def _set_reverb(self, value):
+		self._reverb = value
+
 	# --- speech ---
 
 	@staticmethod
@@ -269,6 +346,20 @@ class SynthDriver(SynthDriver):
 			parts.append("\x01%dP" % self._mapPitch(self._pitch))
 		if self._volume != 50:
 			parts.append("\x01%dV" % self._map0to9(self._volume))
+		# Voice-quality overrides, emitted (after nO, like S/P/V) only when the
+		# user moved them off the card default so presets/defaults show through.
+		# 0-9 sliders default to 50 (-> card 5); reverb defaults to 0 (-> card 0);
+		# tone defaults to "1" (normal).
+		if self._tone != "1":
+			parts.append("\x01%sX" % self._tone)
+		if self._articulation != 50:
+			parts.append("\x01%dA" % self._map0to9(self._articulation))
+		if self._expression != 50:
+			parts.append("\x01%dE" % self._map0to9(self._expression))
+		if self._formant != 50:
+			parts.append("\x01%dF" % self._map0to9(self._formant))
+		if self._reverb != 0:
+			parts.append("\x01%dR" % self._map0to9(self._reverb))
 		return "".join(parts)
 
 	def speak(self, speechSequence):
