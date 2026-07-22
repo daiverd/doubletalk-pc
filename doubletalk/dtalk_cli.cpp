@@ -48,9 +48,9 @@ static bool write_wav_u8(const std::string &path, const std::vector<u8> &pcm, u3
 static void print_state(doubletalk_board &board)
 {
 	doubletalk_cpu &cpu = board.cpu();
-	std::printf("t=%lld cycles  pc=%05x  halted=%d  status=%02x  dac_events=%zu\n",
+	std::printf("t=%lld cycles  pc=%05x  halted=%d  status=%02x  lpc=%02x  dac_events=%zu\n",
 		(long long)board.now_cycles(), cpu.phys_pc(), cpu.halted() ? 1 : 0,
-		board.host_status(), board.dac_event_count());
+		board.host_status(), board.host_lpc_status(), board.dac_event_count());
 	std::printf("  AX=%04x CX=%04x DX=%04x BX=%04x SP=%04x BP=%04x SI=%04x DI=%04x\n",
 		cpu.wreg(0), cpu.wreg(1), cpu.wreg(2), cpu.wreg(3),
 		cpu.wreg(4), cpu.wreg(5), cpu.wreg(6), cpu.wreg(7));

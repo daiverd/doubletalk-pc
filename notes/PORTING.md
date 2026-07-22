@@ -74,9 +74,12 @@ port 0x40   write: complete host-visible TTS status byte (DS:0x1a in
             RC Systems manual and Linux dtlk.c. Firmware owns this
             entirely; the board wrapper just latches whatever's written
             and exposes it to the host read side unchanged.
-port 0x80   seen in early boot trace ("multi-mode board control latch"
-            per investigation doc) - not mapped/needed for the currently
-            working audio path; harmless to leave unmapped (write sinks).
+port 0x80   host-visible LPC status/data latch (ISA base+0). Firmware
+            drives it to 0x7f (idle sentinel) once early in boot, and
+            writes an index-marker number when speech reaches a Ctrl-A
+            <n> I marker. Latched by the board wrapper for both the
+            index-marker stream and host_lpc_status(). See the LPC-port
+            addendum below.
 0xff00-range Peripheral Control Block, see below - owned entirely by the
             CPU core, not board logic.
 ```
@@ -247,3 +250,31 @@ each). Control register bits (from `internal_timer_update`/`inc_timer`):
    `mame-doubletalk`'s `scripts/run_doubletalk_regression.py` - the same
    phrase, the same two checks: no crash, real sustained audio).
 4. Only then wire into `retrochip`'s CLI and write the Python provider.
+
+## Addendum: the LPC status/detection port (base+0, CPU port 0x80)
+
+The MAME driver kept a separate `m_lpc_status` latch initialized to 0x00 and
+noted "the LPC port's CPU-side wiring is still unconfirmed (not yet traced)".
+That has now been traced empirically in the standalone port. The host-visible
+LPC port (ISA base offset 0) is the same **CPU I/O port 0x80** already used
+for index markers:
+
+- During boot the firmware writes **0x7f to port 0x80 once** (traced at
+  ~t=1.05M cycles, right as RDY comes up). 0x7f is the idle sentinel Linux's
+  `drivers/char/dtlk.c` expects: `dtlk_readable()` is `inb_p(lpc) != 0x7f`,
+  and `dtlk_dev_probe()` only recognizes the card when the 16-bit word read
+  at the base port satisfies `(word & 0xfbff) == 0x107f` - low byte 0x7f
+  (LPC idle) and high byte 0x10 (TTS RDY bit). So **the 0x7f is firmware-
+  driven, not open-bus / pulled-up data lines.**
+- When speech reaches a `Ctrl-A <n> I` index marker the firmware writes the
+  marker number to the same port (e.g. 0x05), which is how the LPC port
+  doubles as the index-mark readout path (`dtlk_read_lpc`: any value != 0x7f
+  is an available byte; the host writes 0xff back to acknowledge and the
+  firmware restores 0x7f).
+
+The board wrapper now latches every port-0x80 write into `m_lpc_status`
+(seeded to 0x7f at reset as a pre-boot default) and exposes it via
+`doubletalk_board::host_lpc_status()` and the C API `dtalk_lpc_status()`,
+so a future ISA-port shim can present a probeable card to DOS/Linux screen
+readers. The existing index-event stream is unchanged (the marker writes are
+still emplaced into `m_index_events`).

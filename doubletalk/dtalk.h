@@ -43,6 +43,15 @@ DTALK_API void dtalk_reset(dtalk *dt);
 
 DTALK_API uint32_t dtalk_sample_rate(const dtalk *dt);
 
+/* Read the card's host-visible LPC status/data port (ISA base+0). Returns
+ * 0x7F when idle. A host-level ISA-port shim can present this alongside the
+ * TTS status byte so DOS/Linux screen-reader drivers probe the card the way
+ * they do on real hardware: Linux dtlk.c reads a 16-bit word at the base
+ * port and requires (word & 0xfbff) == 0x107f - i.e. this LPC byte == 0x7F
+ * and the TTS status byte's RDY bit (0x10) set - before treating the card as
+ * present. Values other than 0x7F carry index-marker bytes (dtlk_read_lpc). */
+DTALK_API uint8_t dtalk_lpc_status(dtalk *dt);
+
 /* Queue raw bytes for the card's TTS input port: printable text plus any
  * embedded control codes from the manual (0x01-prefixed commands; CR or
  * NUL starts speech in the default text mode). Bytes are delivered to the

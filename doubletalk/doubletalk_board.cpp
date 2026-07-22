@@ -86,6 +86,11 @@ void doubletalk_board::reset()
 {
 	m_cpu->shim_reset();
 	m_tts_status = 0x00; // firmware initializes the real value via CPU port 0x40
+	// LPC status/data latch idle value. The firmware re-drives this to 0x7f
+	// via CPU port 0x80 early in boot (traced at ~t=1.05M cycles), but seed
+	// it here too so a host probe before that write still reads the idle
+	// sentinel Linux dtlk.c's dtlk_dev_probe() expects (0x107f word at base).
+	m_lpc_status = 0x7f;
 	m_mailbox_data = 0;
 	m_mailbox_pending = false;
 	m_dac_events.clear();
@@ -131,10 +136,15 @@ void doubletalk_board::io_write(u16 port, u8 data)
 		m_tts_status = data;
 		break;
 	case 0x80:
-		// Index-marker latch: when speech output reaches an embedded
-		// Ctrl-A <n> I marker, the firmware writes the marker number here
-		// (traced empirically in this port; previously "multi-mode board
-		// control latch, unmapped" in the MAME driver).
+		// Host-visible LPC status/data latch (base+0). The firmware writes
+		// 0x7f here as the idle sentinel (once early in boot), and writes a
+		// marker number when speech output reaches an embedded Ctrl-A <n> I
+		// index marker - the same latch a real ISA host reads for card
+		// detection (0x7f idle) and index-mark readout (dtlk.c's
+		// dtlk_read_lpc: value != 0x7f means a byte is available). Latch it
+		// for host_lpc_status(), and (unchanged) surface the non-idle marker
+		// writes as index events for the streaming consumer.
+		m_lpc_status = data;
 		m_index_events.emplace_back(m_machine.now_cycles(), data);
 		break;
 	default:

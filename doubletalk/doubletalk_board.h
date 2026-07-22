@@ -73,6 +73,14 @@ public:
 	u8 host_status() const { return m_tts_status; }
 	bool rdy() const { return (m_tts_status & 0x10) != 0; }
 
+	// LPC status/data port read (base+0, firmware-owned byte from CPU port
+	// 0x80): 0x7F when idle. This is the port a real ISA host reads to
+	// probe for the card - Linux dtlk.c's word read at the base port must
+	// come back 0x107f (low byte 0x7f = LPC idle, high byte 0x10 = TTS RDY)
+	// for the card to be detected, and dtlk_readable()/dtlk_read_lpc() treat
+	// any value != 0x7f as an available (index-marker) byte to read.
+	u8 host_lpc_status() const { return m_lpc_status; }
+
 	// --- execution ---
 	// Advance emulated time by (at least) this many CPU cycles.
 	s64 run_cycles(s64 cycles) { return m_machine.run_cycles(cycles); }
@@ -115,6 +123,9 @@ private:
 	std::vector<u8> m_rom;
 
 	u8 m_tts_status = 0;
+	// Host-visible LPC status/data latch (base+0), fed by firmware CPU port
+	// 0x80 writes. Idle value 0x7F - see host_lpc_status()/dtlk.c probe.
+	u8 m_lpc_status = 0x7f;
 	u8 m_mailbox_data = 0;
 	bool m_mailbox_pending = false;
 

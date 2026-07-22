@@ -148,6 +148,11 @@ uint32_t dtalk_sample_rate(const dtalk *)
 	return SAMPLE_RATE;
 }
 
+uint8_t dtalk_lpc_status(dtalk *dt)
+{
+	return dt->board.host_lpc_status();
+}
+
 void dtalk_queue(dtalk *dt, const void *bytes, size_t len)
 {
 	const u8 *p = static_cast<const u8 *>(bytes);
