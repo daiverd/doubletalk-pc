@@ -114,9 +114,12 @@ class SynthDriver(SynthDriver):
 		DriverSetting("filter", "&Filter", availableInSettingsRing=True, defaultVal="3000"),
 		# Voice-quality knobs from the DoubleTalk PC/LT manual (Table 8). All are
 		# native 0-9 (except tone, 0-2), presented as 0-100 sliders with the same
-		# coarse minStep=10 as rate/volume so each step = one card value. Each is
-		# emitted in the utterance prefix only when moved off the card default, so
-		# voice presets and authentic defaults show through (see _prefix).
+		# coarse minStep=10 as rate/volume so each step = one card value. These six
+		# are VOICE-LINKED: selecting a voice snaps them to that voice's firmware
+		# preset so the sliders reflect what is actually heard (WYSIWYG), and each
+		# is emitted in the utterance prefix only when the user moves it OFF the
+		# current voice's preset (see _voicePresets, _set_voice, _prefix). The
+		# defaultVal here is voice 0 (Perfect Paul)'s preset, the startup voice.
 		# Tone (nX) is a 3-way (bass/normal/treble) so it is a combo, like Filter.
 		DriverSetting("tone", "&Tone", availableInSettingsRing=True, defaultVal="1"),
 		# nA articulation 0-9, default 5A. Low = slurred, high = choppy.
@@ -160,6 +163,24 @@ class SynthDriver(SynthDriver):
 		"7": VoiceInfo("7", "Robo Robert"),
 	}
 
+	# Firmware voice presets, keyed by nO voice id. CARD-NATIVE values in the
+	# order (pitch 0-99, articulation 0-9, formant 0-9, tone 0-2, expression 0-9,
+	# reverb 0-9). These are ROM constants: verified by write-testing the card's
+	# settings block via the `settingsmap` diagnostic (dtalk_cli). Selecting nO on
+	# the card loads these, which is what gives each voice its distinct character
+	# (e.g. Vader's low pitch 30, Ricochet's reverb 6, Big Bob's bass tone). The
+	# alias voices 5/6/7 share 0/1/2's preset, expanded explicitly here.
+	_voicePresets = {
+		"0": (50, 5, 5, 1, 5, 0),  # Perfect Paul
+		"1": (30, 4, 5, 1, 7, 2),  # Vader
+		"2": (40, 4, 1, 0, 6, 0),  # Big Bob
+		"3": (60, 8, 6, 2, 4, 0),  # Precise Pete
+		"4": (40, 5, 2, 1, 5, 6),  # Ricochet
+		"5": (50, 5, 5, 1, 5, 0),  # Biff        = Perfect Paul
+		"6": (30, 4, 5, 1, 7, 2),  # Skip        = Vader
+		"7": (40, 4, 1, 0, 6, 0),  # Robo Robert = Big Bob
+	}
+
 	@classmethod
 	def check(cls):
 		return os.path.isfile(os.path.join(_DIR, _dllName())) \
@@ -192,11 +213,17 @@ class SynthDriver(SynthDriver):
 		self._volume = 50
 		self._voice = "0"
 		self._filter = "3000"
+		# True only while NVDA is restoring saved settings (see loadSettings). It
+		# guards _set_voice: a config restore/init must NOT snap the six voice-
+		# linked settings to the voice preset (that would clobber a user's saved
+		# per-voice value); an interactive voice change (flag False) DOES snap.
+		self._restoring = False
 		# Voice-quality settings, stored as their 0-100 slider value (tone as its
-		# card string). Defaults are the slider positions that map to the card's
-		# own defaults, so at these values _prefix emits nothing and the card /
-		# voice-preset defaults show through: articulation/expression/formant 50
-		# -> card 5, reverb 0 -> card 0, tone "1" -> normal.
+		# card string). Initial values are voice 0 (Perfect Paul)'s firmware preset
+		# converted to slider units (articulation/expression/formant card 5 -> 50,
+		# reverb card 0 -> 0, tone card 1 -> "1"); at these values _prefix emits
+		# nothing for voice 0 and its preset shows through. On an interactive voice
+		# change _set_voice re-snaps all six to the new voice's preset.
 		self._tone = "1"
 		self._articulation = 50
 		self._expression = 50
@@ -218,14 +245,52 @@ class SynthDriver(SynthDriver):
 		with self._libLock:
 			self._dt.close()
 
+	def loadSettings(self, onlyChanged=False):
+		# NVDA restores saved settings by first changing the voice and THEN
+		# restoring each other setting (SynthDriver.loadSettings applies "voice"
+		# before the rest of supportedSettings). If _set_voice snapped the six
+		# voice-linked settings to the firmware preset during this, it would
+		# overwrite the user's saved per-voice values a moment before they are
+		# restored - and worse, an unchanged setting is skipped on an onlyChanged
+		# profile switch, so the snap could stick. Guard the whole restore so
+		# _set_voice does NOT snap here; the saved values (applied by the base
+		# loadSettings after the voice change) win. Interactive voice changes
+		# happen outside loadSettings (settings ring / Voice Settings dialog ->
+		# changeVoice), where _restoring is False, so those still snap.
+		self._restoring = True
+		try:
+			super().loadSettings(onlyChanged)
+		finally:
+			self._restoring = False
+
 	# --- settings ---
 
 	def _get_voice(self):
 		return self._voice
 
 	def _set_voice(self, value):
-		if value in self._voices:
-			self._voice = value
+		if value not in self._voices:
+			return
+		self._voice = value
+		if self._restoring:
+			# Config restore / init: honor the saved per-voice settings, which
+			# the base loadSettings applies right after this. Do not snap.
+			return
+		# Interactive voice change: snap the six voice-linked settings to the new
+		# voice's firmware preset so the sliders (which NVDA re-reads via the
+		# getters after changeVoice, both in the Voice Settings dialog and the
+		# settings ring) show exactly what the card will produce for this voice.
+		# Convert each card-native preset value to its NVDA slider units; these
+		# round-trip back to the same card value in _prefix, so an untouched voice
+		# emits only the nO select and its preset shows through.
+		pitch, articulation, formant, tone, expression, reverb = \
+			self._voicePresets[value]
+		self._pitch = self._cardPitchToNvda(pitch)
+		self._articulation = articulation * 10
+		self._formant = formant * 10
+		self._tone = str(tone)
+		self._expression = expression * 10
+		self._reverb = reverb * 10
 
 	def _getAvailableVoices(self):
 		return self._voices
@@ -320,6 +385,14 @@ class SynthDriver(SynthDriver):
 		return int(round(pct * 99 / 100))
 
 	@staticmethod
+	def _cardPitchToNvda(p):
+		# Card nP 0-99 -> NVDA pitch 0-100, the inverse of _mapPitch chosen so it
+		# round-trips: _mapPitch(_cardPitchToNvda(p)) == p for every preset pitch
+		# (30->30, 40->40, 50->51->50, 60->61->60). Used to snap the pitch slider
+		# to a voice preset so it reflects the pitch the card will actually use.
+		return int(round(p * 100 / 99))
+
+	@staticmethod
 	def _map0to9(pct):
 		# NVDA 0-100 -> card 0-9. 50 -> 5 (the card's default speed/volume),
 		# 90+ -> 9. Plain rounding would give 4 at 50 (banker's rounding of 4.5),
@@ -328,37 +401,41 @@ class SynthDriver(SynthDriver):
 
 	def _prefix(self, pitchOverride=None):
 		# nS speed 0-9, nP pitch 0-99, nV volume 0-9, nO voice 0-7.
-		# Voice (nO) MUST come first: the manual notes it loads a preset that
-		# resets pitch/tone/etc., so a trailing parameter would clobber it.
+		# Voice (nO) MUST come first: the manual notes it loads the voice preset
+		# (resetting pitch/tone/etc. on the card), so every following parameter
+		# overrides that preset - and a trailing parameter would be clobbered.
 		#
-		# Each voice's preset gives it its distinct pitch/tone (that is what
-		# makes the 8 voices actually sound different). NVDA's defaults (all 50)
-		# are the card's own defaults, so at 50 we OMIT the matching absolute
-		# command and let the preset show through; only a slider the user moved
-		# off 50 emits an absolute override. pitchOverride forces an absolute nP
-		# regardless (used for capital-letter pitch changes).
+		# WYSIWYG emission: nO already loads the voice's preset on the card, so a
+		# per-voice setting left at its preset needs no command - the preset shows
+		# through exactly. For each of the six voice-linked settings we therefore
+		# emit its absolute command ONLY when the current setting's card value
+		# differs from THIS voice's preset (an untouched voice emits nothing but
+		# nO; a value the user moved off-preset is emitted absolutely, never
+		# re-flattened to a global default). Rate/Volume are NOT voice-linked
+		# (nS/nV are constant across voices) so they keep the global omit-at-50%
+		# rule. pitchOverride forces an absolute nP (capital-letter pitch changes).
+		presetPitch, presetArtic, presetFormant, presetTone, presetExpr, \
+			presetReverb = self._voicePresets[self._voice]
 		parts = ["\x01%sO" % self._voice]
 		if self._rate != 50:
 			parts.append("\x01%dS" % self._map0to9(self._rate))
 		if pitchOverride is not None:
 			parts.append("\x01%dP" % self._mapPitch(pitchOverride))
-		elif self._pitch != 50:
+		elif self._mapPitch(self._pitch) != presetPitch:
 			parts.append("\x01%dP" % self._mapPitch(self._pitch))
 		if self._volume != 50:
 			parts.append("\x01%dV" % self._map0to9(self._volume))
-		# Voice-quality overrides, emitted (after nO, like S/P/V) only when the
-		# user moved them off the card default so presets/defaults show through.
-		# 0-9 sliders default to 50 (-> card 5); reverb defaults to 0 (-> card 0);
-		# tone defaults to "1" (normal).
-		if self._tone != "1":
+		# Voice-quality overrides (after nO, like S/P/V): emitted only when moved
+		# off the current voice's preset so the preset shows through untouched.
+		if int(self._tone) != presetTone:
 			parts.append("\x01%sX" % self._tone)
-		if self._articulation != 50:
+		if self._map0to9(self._articulation) != presetArtic:
 			parts.append("\x01%dA" % self._map0to9(self._articulation))
-		if self._expression != 50:
+		if self._map0to9(self._expression) != presetExpr:
 			parts.append("\x01%dE" % self._map0to9(self._expression))
-		if self._formant != 50:
+		if self._map0to9(self._formant) != presetFormant:
 			parts.append("\x01%dF" % self._map0to9(self._formant))
-		if self._reverb != 0:
+		if self._map0to9(self._reverb) != presetReverb:
 			parts.append("\x01%dR" % self._map0to9(self._reverb))
 		return "".join(parts)
 
