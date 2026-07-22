@@ -1,6 +1,6 @@
 # Porting DoubleTalk PC to standalone C++ - scope assessment and reference
 
-Status: **done - see `native/retrochip/doubletalk/`.** The port took the
+Status: **done - see `doubletalk/`.** The port took the
 "vendor the MAME core verbatim + compatibility shim" route rather than the
 hand-transcription this document was bracing for: the five CPU core files
 compile unmodified against `shim/emu.h`, so the transcription-bug failure

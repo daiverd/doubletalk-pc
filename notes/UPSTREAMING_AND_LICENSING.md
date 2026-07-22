@@ -5,7 +5,7 @@ upstream and (2) what of the standalone emulator + NVDA add-on can legally be
 distributed. Written 2026-07-22. Sources: MAME contributing docs
 (docs.mamedev.org/contributing, mamedev/mame CONTRIBUTING.md), the working
 `doubletalk` branch in `~/src/mame`, NVDA `copying.txt` and add-on docs, and the
-files under `native/retrochip/doubletalk/`.
+files under `doubletalk/`.
 
 ---
 

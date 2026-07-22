@@ -6,7 +6,7 @@
 # DoubleTalk PC (emulated) synth driver for NVDA.
 #
 # Drives dtalk.dll (the standalone DoubleTalk PC emulator from
-# rusty_tts/native/retrochip/doubletalk - vendored MAME 80C188EB core plus
+# doubletalk-pc's doubletalk/ - vendored MAME 80C188EB core plus
 # the card's original firmware ROM) as an NVDA speech synthesizer.
 #
 # Files expected next to this __init__.py:
