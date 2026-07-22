@@ -195,6 +195,19 @@ struct dtalk
 
 	// Rescale the in-RAM ROM period table's rate region for the given boost
 	// level (always relative to the saved stock values).
+	//
+	// Final-consonant truncation fix: the firmware's frame engine has a hard
+	// floor at period 64 - the frame-render block at CS:0x4cd7 is skipped when
+	// the running period <= 0x40 (cmpw $0x40,0x2bc; jle at CS:0x4cd0), which
+	// drops that frame's audio. Word-final and phrase-final falling intonation
+	// drives the table index up into the region's fast tail (idx 19-22, stock
+	// periods 81..73); scaling those by 80% yields 64/61/60/58, i.e. at or
+	// below the floor, so the firmware silently drops the final frames and the
+	// closing consonant (e.g. the /n/ of "configuration") is cut off. The stock
+	// table itself never goes below 73, so we clamp every scaled period to the
+	// stock region's own minimum: the firmware then only ever sees periods it
+	// already handles natively, no frame falls into the degenerate path, and
+	// the speed gain on all the higher-period (steady-state) frames is kept.
 	void apply_rate_boost(int level)
 	{
 		if (!rate_saved)
@@ -202,10 +215,14 @@ struct dtalk
 		if (level < 0) level = 0;
 		if (level > RATE_BOOST_MAX) level = RATE_BOOST_MAX;
 		const int pct = RATE_BOOST_PCT[level];
+		u32 stock_min = 0xffff;
+		for (int i = RATE_REGION_LO; i <= RATE_REGION_HI; i++)
+			if (rate_orig[i - RATE_REGION_LO] < stock_min)
+				stock_min = rate_orig[i - RATE_REGION_LO];
 		for (int i = RATE_REGION_LO; i <= RATE_REGION_HI; i++)
 		{
 			u32 w = u32(rate_orig[i - RATE_REGION_LO]) * u32(pct) / 100u;
-			if (w < 1) w = 1;
+			if (w < stock_min) w = stock_min; // never below the firmware's floor
 			if (w > 0xffff) w = 0xffff;
 			u32 off = RATE_TABLE_OFF + 2u * u32(i);
 			board.rom_poke(off, u8(w & 0xff));

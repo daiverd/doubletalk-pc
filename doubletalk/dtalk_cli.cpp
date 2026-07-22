@@ -16,6 +16,13 @@
 //                                                  level (dtalk_set_rate_boost)
 //   dtalk_cli <rom> booststress [level]          - multi-utterance safety run
 //                                                  at a rate-boost level
+//   dtalk_cli <rom> dacprobe <level|pct> <text>  - DIAGNOSTIC: speak at a boost
+//                                                  level (0/1/2) or raw uniform
+//                                                  period percent (>=50) and
+//                                                  report raw DAC-event ground
+//                                                  truth: card_busy-vs-last-
+//                                                  event timing, tail envelope,
+//                                                  and period-table index usage
 
 #include "doubletalk_board.h"
 #include "dtalk.h"
@@ -464,6 +471,154 @@ int main(int argc, char **argv)
 		for (auto &kv : hits)
 			std::printf("  pc=%05x %s  x%ld\n", kv.first.first,
 				kv.first.second ? "WRITE" : "READ ", kv.second);
+		return 0;
+	}
+
+	if (cmd == "dacprobe")
+	{
+		// DIAGNOSTIC: speak a word at a rate-boost level at the board level and
+		// report, in raw DAC-event ground truth: when card_busy() first goes
+		// false, and when the LAST DAC event actually fires. If the last DAC
+		// event is well after card_busy went false, the firmware is still
+		// draining audio after it looks idle (capture-window relevant).
+		//   dtalk_cli <rom> dacprobe <level> <text>
+		int arg = (argc > 3) ? std::atoi(argv[3]) : 0;
+		std::string text = (argc > 4) ? argv[4] : "CONFIGURATION";
+
+		// arg 0/1/2 = boost level (PCT table); arg >= 50 = raw uniform percent.
+		const u32 RATE_TABLE_OFF = 0x48da;
+		const int RATE_REGION_LO = 10, RATE_REGION_HI = 22;
+		const int PCT[] = { 100, 88, 80 };
+		int pct = (arg >= 50) ? arg : PCT[arg < 0 ? 0 : (arg > 2 ? 2 : arg)];
+		int level = arg;
+		// Mirror dtalk's apply_rate_boost, including the stock-minimum period
+		// floor that keeps final frames out of the firmware's degenerate path.
+		u32 stock_min = 0xffff;
+		for (int i = RATE_REGION_LO; i <= RATE_REGION_HI; i++)
+		{
+			u32 off = RATE_TABLE_OFF + 2u * u32(i);
+			u32 p = u32(board.rom_peek(off)) | u32(board.rom_peek(off + 1)) << 8;
+			if (p < stock_min) stock_min = p;
+		}
+		for (int i = RATE_REGION_LO; i <= RATE_REGION_HI; i++)
+		{
+			u32 off = RATE_TABLE_OFF + 2u * u32(i);
+			u32 w = (u32(board.rom_peek(off)) | u32(board.rom_peek(off + 1)) << 8);
+			w = w * u32(pct) / 100u;
+			if (w < stock_min) w = stock_min;
+			if (w > 0xffff) w = 0xffff;
+			board.rom_poke(off, u8(w & 0xff));
+			board.rom_poke(off + 1, u8((w >> 8) & 0xff));
+		}
+
+		const u32 BUF_READ_PTR = 0x000f, BUF_WRITE_PTR = 0x0011;
+		auto card_busy = [&]() {
+			return (board.host_status() & 0x40) != 0
+				|| board.ram16(BUF_READ_PTR) != board.ram16(BUF_WRITE_PTR);
+		};
+
+		// Track which period-table index the firmware reads at 0x84b57
+		// (mov cs:0x48da(di),ax): di = index*2. Record (cycle, index).
+		std::vector<std::pair<s64,int>> idx_hits;
+		board.cpu().trace_hook = [&](offs_t) {
+			if (board.cpu().phys_pc() == 0x84b57)
+				idx_hits.emplace_back(board.now_cycles(), int(board.cpu().wreg(7)) / 2);
+		};
+
+		s64 boot_limit = s64(doubletalk_board::CPU_HZ) * 10;
+		while (!board.rdy() && board.now_cycles() < boot_limit)
+			board.run_cycles(10000);
+		// swallow power-on click window
+		board.run_cycles(doubletalk_board::CPU_HZ / 10);
+		size_t dac_before = board.dac_events().size();
+
+		std::string payload = text; payload.push_back('\r');
+		for (char ch : payload)
+		{
+			while (!board.rdy())
+				board.run_cycles(1000);
+			board.host_write(u8(ch));
+			board.run_cycles(2000);
+		}
+
+		// Run to fully idle, watching card_busy transitions and DAC events.
+		const s64 CHUNK = doubletalk_board::CPU_HZ / 1000; // 1ms
+		s64 busy_false_cycle = -1;
+		bool was_busy = true;
+		s64 quiet_needed = s64(doubletalk_board::CPU_HZ) * 2; // 2s hard stop
+		s64 start = board.now_cycles();
+		s64 last_seen_event_cycle = start;
+		size_t last_count = board.dac_events().size();
+		while (board.now_cycles() - start < quiet_needed)
+		{
+			board.run_cycles(CHUNK);
+			const auto &ev = board.dac_events();
+			if (ev.size() != last_count)
+			{
+				last_seen_event_cycle = ev.back().first;
+				last_count = ev.size();
+			}
+			bool busy = card_busy();
+			if (was_busy && !busy)
+				busy_false_cycle = board.now_cycles();
+			if (busy)
+				busy_false_cycle = -1; // reset on any re-busy
+			was_busy = busy;
+			// stop once quiet for 300ms and not busy
+			if (!busy && board.now_cycles() - last_seen_event_cycle > doubletalk_board::CPU_HZ * 3 / 10)
+				break;
+		}
+
+		const auto &ev = board.dac_events();
+		size_t total = ev.size() - dac_before;
+		double hz = double(doubletalk_board::CPU_HZ);
+		std::printf("arg=%d pct=%d text=\"%s\"\n", level, pct, text.c_str());
+		std::printf("  total DAC events: %zu\n", total);
+		std::printf("  first event: %.1fms  last event: %.1fms  span: %.1fms\n",
+			(ev[dac_before].first - start) / hz * 1000.0,
+			(last_seen_event_cycle - start) / hz * 1000.0,
+			(last_seen_event_cycle - ev[dac_before].first) / hz * 1000.0);
+		if (busy_false_cycle >= 0)
+			std::printf("  card_busy went false at: %.1fms\n",
+				(busy_false_cycle - start) / hz * 1000.0);
+		else
+			std::printf("  card_busy still true at loop end\n");
+		if (busy_false_cycle >= 0)
+			std::printf("  DAC events AFTER card_busy false: last event is %.1fms past busy-false\n",
+				(last_seen_event_cycle - busy_false_cycle) / hz * 1000.0);
+		// Tail envelope: RMS of raw DAC (centered at 128) in 10ms bins, last 250ms.
+		s64 binc = doubletalk_board::CPU_HZ / 100; // 10ms
+		s64 tail_start = last_seen_event_cycle - doubletalk_board::CPU_HZ * 25 / 100;
+		std::printf("  tail DAC envelope (10ms bins, |val-128| mean), last 250ms:\n   ");
+		for (s64 t = tail_start; t < last_seen_event_cycle; t += binc)
+		{
+			double acc = 0; int cnt = 0;
+			for (size_t k = dac_before; k < ev.size(); k++)
+				if (ev[k].first >= t && ev[k].first < t + binc)
+				{ acc += std::abs(int(ev[k].second) - 128); cnt++; }
+			std::printf("%5.1f ", cnt ? acc / cnt : 0.0);
+		}
+		std::printf("\n");
+		board.cpu().trace_hook = nullptr;
+		// Period-table index usage: overall histogram, and the indices read in
+		// the final 120ms of DAC activity (the final-consonant frames).
+		{
+			int hist[32] = {0};
+			for (auto &h : idx_hits) if (h.second >= 0 && h.second < 32) hist[h.second]++;
+			std::printf("  index histogram (idx:count):");
+			for (int i = 0; i < 32; i++) if (hist[i]) std::printf(" %d:%d", i, hist[i]);
+			std::printf("\n");
+			s64 fin = last_seen_event_cycle - doubletalk_board::CPU_HZ * 12 / 100; // 120ms
+			std::printf("  indices read in final 120ms (idx@ms scaled-period):");
+			for (auto &h : idx_hits) if (h.first >= fin)
+			{
+				u32 off = RATE_TABLE_OFF + 2u * u32(h.second);
+				u32 per = u32(board.rom_peek(off)) | u32(board.rom_peek(off + 1)) << 8;
+				std::printf(" %d@%.0f(p=%u)", h.second,
+					(h.first - start) / hz * 1000.0, per);
+			}
+			std::printf("\n");
+		}
 		return 0;
 	}
 
