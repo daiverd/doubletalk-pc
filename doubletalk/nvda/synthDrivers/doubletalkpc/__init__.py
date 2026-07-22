@@ -52,6 +52,10 @@ class _DtalkDLL:
 		self.lib.dtalk_active.argtypes = [ctypes.c_void_p]
 		self.lib.dtalk_synth.restype = ctypes.c_size_t
 		self.lib.dtalk_synth.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+		# Signed 16-bit path through the modeled output stage (filtered, gained).
+		self.lib.dtalk_synth16.restype = ctypes.c_size_t
+		self.lib.dtalk_synth16.argtypes = [
+			ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_size_t]
 		self.lib.dtalk_read_index_marks.restype = ctypes.c_size_t
 		self.lib.dtalk_read_index_marks.argtypes = [
 			ctypes.c_void_p, ctypes.POINTER(_DtalkIndexMark), ctypes.c_size_t]
@@ -104,13 +108,16 @@ class SynthDriver(SynthDriver):
 		# Serializes EVERY ctypes call into the (non-thread-safe) dtalk handle
 		# across the main thread (cancel/terminate) and the synth thread.
 		self._libLock = threading.Lock()
-		# dtalk_synth emits unsigned 8-bit mono PCM, which is exactly the
-		# WAVE_FORMAT_PCM 8-bit layout WavePlayer wants (8-bit PCM is unsigned
-		# by the WAV convention), so feed its bytes straight through.
+		# dtalk_synth16 emits signed 16-bit mono PCM through the modeled output
+		# stage (DC block + reconstruction low-pass + MAME's 0.5 headroom gain),
+		# which is exactly the WAVE_FORMAT_PCM 16-bit layout WavePlayer wants
+		# (16-bit PCM is signed little-endian), so feed its bytes straight
+		# through. This matches the cleaner MAME reference rather than the raw
+		# 8-bit DAC staircase.
 		self._player = nvwave.WavePlayer(
 			channels=1,
 			samplesPerSec=int(self._dt.sample_rate),
-			bitsPerSample=8,
+			bitsPerSample=16,
 			outputDevice=config.conf["audio"]["outputDevice"],
 		)
 		self._rate = 50
@@ -248,7 +255,10 @@ class SynthDriver(SynthDriver):
 	def _synthLoop(self):
 		lib = self._dt.lib
 		h = self._dt.handle
-		buf = ctypes.create_string_buffer(SAMPLES_PER_CHUNK)
+		# 16-bit samples: 2 bytes each. A c_char buffer of 2*chunk bytes, cast to
+		# int16* for the call; buf.raw[:n*2] is the little-endian PCM to feed.
+		buf = ctypes.create_string_buffer(SAMPLES_PER_CHUNK * 2)
+		buf16 = ctypes.cast(buf, ctypes.POINTER(ctypes.c_int16))
 		marks = (_DtalkIndexMark * 16)()
 		# Cumulative dtalk_synth() output position; matches the emulator's own
 		# absolute sample counter (dtalk_stop does not reset it), so index
@@ -265,19 +275,19 @@ class SynthDriver(SynthDriver):
 				pending = []  # (sample_pos, nvda_index) not yet fed past
 				while not self._stopping.is_set():
 					with self._libLock:
-						n = lib.dtalk_synth(h, buf, SAMPLES_PER_CHUNK)
+						n = lib.dtalk_synth16(h, buf16, SAMPLES_PER_CHUNK)
 						if n:
 							nm = lib.dtalk_read_index_marks(h, marks, 16)
 							newMarks = [(marks[i].value, marks[i].sample_pos)
 								for i in range(nm)]
-							raw = buf.raw[:n]
+							raw = buf.raw[:n * 2]  # n samples * 2 bytes (16-bit)
 					if n == 0:
 						break
 					for value, samplePos in newMarks:
 						nvdaIndex = self._markMap.pop(value, None)
 						if nvdaIndex is not None:
 							pending.append((samplePos, nvdaIndex))
-					# raw is already unsigned 8-bit mono PCM = WavePlayer's format
+					# raw is already signed 16-bit LE mono PCM = WavePlayer's format
 					chunkEnd = samplesDone + n
 					fired = [m for m in pending if m[0] <= chunkEnd]
 					pending = [m for m in pending if m[0] > chunkEnd]

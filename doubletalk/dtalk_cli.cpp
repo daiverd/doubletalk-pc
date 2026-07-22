@@ -4,6 +4,8 @@
 //   dtalk_cli <rom> trace [max_instructions]     - boot trace to stdout
 //   dtalk_cli <rom> boot [cycles]                - run boot, report state
 //   dtalk_cli <rom> say <text> <out.wav>         - synthesize to 8-bit WAV
+//   dtalk_cli <rom> say16 <text> <out.wav>       - synthesize to 16-bit WAV
+//                                                  (modeled output stage)
 
 #include "doubletalk_board.h"
 #include "dtalk.h"
@@ -42,6 +44,29 @@ static bool write_wav_u8(const std::string &path, const std::vector<u8> &pcm, u3
 	std::memcpy(hdr + 40, &data_size, 4);
 	f.write(reinterpret_cast<char *>(hdr), sizeof(hdr));
 	f.write(reinterpret_cast<const char *>(pcm.data()), pcm.size());
+	return bool(f);
+}
+
+static bool write_wav_s16(const std::string &path, const std::vector<int16_t> &pcm, u32 rate)
+{
+	std::ofstream f(path, std::ios::binary);
+	if (!f)
+		return false;
+	u32 data_size = u32(pcm.size() * 2);
+	u32 byte_rate = rate * 2;
+	u8 hdr[44] = {
+		'R','I','F','F', 0,0,0,0, 'W','A','V','E',
+		'f','m','t',' ', 16,0,0,0, 1,0, 1,0,
+		0,0,0,0, 0,0,0,0, 2,0, 16,0,
+		'd','a','t','a', 0,0,0,0
+	};
+	u32 riff_size = 36 + data_size;
+	std::memcpy(hdr + 4, &riff_size, 4);
+	std::memcpy(hdr + 24, &rate, 4);
+	std::memcpy(hdr + 28, &byte_rate, 4);
+	std::memcpy(hdr + 40, &data_size, 4);
+	f.write(reinterpret_cast<char *>(hdr), sizeof(hdr));
+	f.write(reinterpret_cast<const char *>(pcm.data()), data_size);
 	return bool(f);
 }
 
@@ -147,6 +172,44 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		std::fprintf(stderr, "wrote %zu samples (%.2fs at %uHz) to %s\n",
+			pcm.size(), double(pcm.size()) / rate, rate, out_path.c_str());
+		return 0;
+	}
+
+	if (cmd == "say16")
+	{
+		// Same as say, but through the modeled 16-bit output stage.
+		if (argc < 5)
+		{
+			std::fprintf(stderr, "usage: %s <rom.bin> say16 <text> <out.wav>\n", argv[0]);
+			return 2;
+		}
+		std::string text = argv[3];
+		std::string out_path = argv[4];
+
+		dtalk *dt = dtalk_create(rom.data(), rom.size());
+		if (!dt)
+		{
+			std::fprintf(stderr, "dtalk_create failed\n");
+			return 1;
+		}
+		dtalk_say(dt, text.c_str());
+
+		std::vector<int16_t> pcm;
+		int16_t buf[4096];
+		size_t n;
+		while ((n = dtalk_synth16(dt, buf, 4096)) > 0)
+			pcm.insert(pcm.end(), buf, buf + n);
+
+		u32 rate = dtalk_sample_rate(dt);
+		dtalk_destroy(dt);
+
+		if (!write_wav_s16(out_path, pcm, rate))
+		{
+			std::fprintf(stderr, "failed writing %s\n", out_path.c_str());
+			return 1;
+		}
+		std::fprintf(stderr, "wrote %zu samples (%.2fs at %uHz, 16-bit) to %s\n",
 			pcm.size(), double(pcm.size()) / rate, rate, out_path.c_str());
 		return 0;
 	}

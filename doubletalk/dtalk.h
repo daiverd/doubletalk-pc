@@ -74,6 +74,18 @@ DTALK_API int dtalk_active(dtalk *dt);
  * nothing queued). Call repeatedly to stream. */
 DTALK_API size_t dtalk_synth(dtalk *dt, uint8_t *out, size_t max_samples);
 
+/* Same semantics as dtalk_synth, but returns signed 16-bit samples run
+ * through a modeled output stage that approximates what the MAME ISA-card
+ * emulation does to the identical raw DAC bytes (the cleaner reference the
+ * user A/Bs against): a DC-blocking high-pass to kill utterance-boundary
+ * steps, a 2-pole reconstruction low-pass that smooths the 10.5kHz zero-
+ * order-hold staircase (the source of the audible hiss), and MAME's 0.5
+ * output-route headroom gain so loud presets (e.g. Big Bob) come off the
+ * rails. Runs at the same dtalk_sample_rate(); filter state lives in the
+ * instance and is reset by dtalk_reset()/dtalk_stop(). The plain 8-bit
+ * dtalk_synth() path is byte-for-byte unchanged. */
+DTALK_API size_t dtalk_synth16(dtalk *dt, int16_t *out, size_t max_samples);
+
 /* Index markers (embedded Ctrl-A <n> I, n = 0-99): each marker reached by
  * the speech output is queued with the absolute output-sample position at
  * which it fired (positions count all samples produced since create/reset,
