@@ -622,6 +622,39 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	if (cmd == "presetdump")
+	{
+		// DEBUG: for each voice 0-7, apply the voice-select command and dump the
+		// firmware's settings block (DS:0x86..0xaf, copied from ROM CS:0x317 at
+		// boot and rewritten per voice preset). Reveals what each preset loads
+		// for pitch (binary 0x9b / ASCII 0xa2) and the other 0-9 knobs, so the
+		// NVDA driver can reflect real preset values on the sliders (WYSIWYG).
+		for (int v = 0; v < 8; v++)
+		{
+			board.reset();
+			s64 boot_limit = s64(doubletalk_board::CPU_HZ) * 10;
+			while (!board.rdy() && board.now_cycles() < boot_limit)
+				board.run_cycles(10000);
+			// select voice, then a short utterance so the preset is applied
+			char buf[16];
+			std::snprintf(buf, sizeof(buf), "\x01%dO HELLO\r", v);
+			for (char *p = buf; *p; p++)
+			{
+				while (!board.rdy())
+					board.run_cycles(1000);
+				board.host_write(u8(*p));
+				board.run_cycles(2000);
+			}
+			board.run_cycles(s64(doubletalk_board::CPU_HZ) * 2);
+			std::printf("voice %d: pitch(0x9b)=%u ascii(0xa2)=%u | block 0x86-0xaf:",
+				v, board.ram16(0x9b) & 0xff, board.ram16(0xa2) & 0xff);
+			for (u32 a = 0x86; a <= 0xaf; a++)
+				std::printf(" %02x", board.ram16(a) & 0xff);
+			std::printf("\n");
+		}
+		return 0;
+	}
+
 	std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
 	return 2;
 }
