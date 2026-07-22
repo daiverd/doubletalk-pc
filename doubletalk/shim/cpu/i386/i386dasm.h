@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // Shim stub for MAME's x86 disassembler: i86.cpp constructs one in
 // create_disassembler(), but nothing in the standalone harness disassembles
 // through it, so it is inert.

@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // Standalone RC Systems DoubleTalk PC board: the onboard 80C188EB (vendored
 // MAME core, see mame/) plus the thin board wrapper ported from the MAME ISA
 // driver (doubletalkpc.cpp on the companion mame-doubletalk repo's

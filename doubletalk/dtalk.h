@@ -1,4 +1,5 @@
 /* license:BSD-3-Clause
+ * copyright-holders:David Sexton
  *
  * dtalk.h - C API for the standalone RC Systems DoubleTalk PC emulator.
  *

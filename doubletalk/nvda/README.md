@@ -28,7 +28,8 @@ pass on Windows.
 3. Zip it up (an `.nvda-addon` is just a zip with `manifest.ini` at the
    root):
 
-       ./build_addon.sh          # produces doubletalkpc.nvda-addon
+       ./build_addon.sh             # public-safe: no ROM bundled
+       ./build_addon.sh --with-rom  # personal build: bundles the ROM - never distribute
 
 4. Install by opening the `.nvda-addon` file on the Windows machine, then
    select "DoubleTalk PC (emulated)" in NVDA's synthesizer dialog.

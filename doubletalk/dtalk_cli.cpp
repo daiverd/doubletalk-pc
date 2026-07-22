@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // CLI harness for the standalone DoubleTalk PC board.
 //
 //   dtalk_cli <rom> trace [max_instructions]     - boot trace to stdout

@@ -1,3 +1,8 @@
+# license: BSD-3-Clause
+# copyright-holders: David Sexton
+# (NVDA's GPL-2 license includes an explicit exception permitting non-GPL
+# synthesizer drivers; BSD-3 is additionally GPL-compatible regardless.)
+#
 # DoubleTalk PC (emulated) synth driver for NVDA.
 #
 # Drives dtalk.dll (the standalone DoubleTalk PC emulator from

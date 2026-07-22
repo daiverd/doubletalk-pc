@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // C API implementation over doubletalk_board. See dtalk.h.
 
 #define DTALK_BUILD 1

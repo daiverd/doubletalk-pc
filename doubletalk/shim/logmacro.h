@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // Shim replacement for MAME's logmacro.h: all masked logging compiles out.
 #ifndef DOUBLETALK_SHIM_LOGMACRO_H
 #define DOUBLETALK_SHIM_LOGMACRO_H

@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // Minimal MAME-compatibility shim so the vendored, unmodified i86.cpp/i186.cpp
 // CPU core (see ../mame/) compiles and runs outside MAME.
 //

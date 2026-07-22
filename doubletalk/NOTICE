@@ -1,0 +1,45 @@
+DoubleTalk PC standalone emulator
+License: BSD-3-Clause (all source in this directory)
+
+This directory redistributes CPU emulation source files from MAME
+(https://github.com/mamedev/mame), BSD-3-Clause, in mame/:
+
+  i86.cpp, i86.h, i86inline.h, i186.cpp, i186.h
+      copyright-holders: Carl
+      (I80C188EB / EB Peripheral Control Block additions: Christopher Toth)
+  endianness.h
+      copyright-holders: Aaron Giles, Vas Crabb
+
+All other source (shim/, board wrapper, dtalk C API, CLI, NVDA driver):
+      copyright-holders: David Sexton
+
+BSD-3-Clause terms (applies to all of the above):
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+NOT INCLUDED and never distributable with this software: the DoubleTalk PC
+firmware ROM (doubletalkpc.bin), which is proprietary to RC Systems, Inc.
+Users must obtain it themselves (see scripts/fetch_roms.sh in the
+repository root).

@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 #include "doubletalk_board.h"
 
 // ------------------------------------------------------------------------

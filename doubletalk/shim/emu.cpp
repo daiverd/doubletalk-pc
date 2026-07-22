@@ -1,4 +1,5 @@
 // license:BSD-3-Clause
+// copyright-holders:David Sexton
 // Implementation of the MAME-compatibility shim's timer scheduler and run
 // loop. See emu.h for the design notes.
 
