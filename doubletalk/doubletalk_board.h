@@ -1,7 +1,9 @@
 // license:BSD-3-Clause
 // Standalone RC Systems DoubleTalk PC board: the onboard 80C188EB (vendored
 // MAME core, see mame/) plus the thin board wrapper ported from the MAME ISA
-// driver (native/mame-doubletalk/mame-src-overlay/.../doubletalkpc.cpp).
+// driver (doubletalkpc.cpp on the companion mame-doubletalk repo's
+// doubletalk branch - the reference implementation this port is validated
+// against).
 //
 // The host-facing surface is the same two-port protocol a real ISA host
 // sees: write text bytes to the TTS port (RDY-gated), read the TTS status
