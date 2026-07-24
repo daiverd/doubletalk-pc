@@ -75,8 +75,7 @@ An [NVDA](https://www.nvaccess.org/) speech-synthesizer driver lives in
 [`doubletalk/nvda/`](doubletalk/nvda/). It maps NVDA's rate/pitch/volume/voice
 controls onto the card's own commands and plays the firmware's 10.5 kHz PCM.
 
-> **Status:** scaffold — built against the documented NVDA 2023.1+ synth-driver
-> API but not yet tested on a real Windows NVDA install. Expect a debugging pass.
+> **Status:** working on NVDA (2023.1+, Windows).
 
 See the [add-on README](doubletalk/nvda/README.md) for build and install steps.
 

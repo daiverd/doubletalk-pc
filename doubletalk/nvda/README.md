@@ -6,10 +6,8 @@ firmware does all the speech; NVDA just feeds it text bytes and plays the
 10504Hz PCM it produces — the same path a 1993 screen reader used, minus
 the ISA slot.
 
-**Status: scaffold, not yet tested on a real NVDA install.** Built on this
-project's Linux box against the documented NVDA 2023.1+ synth driver API
-(`WavePlayer.feed(onDone=...)`, `synthIndexReached`); expect a debugging
-pass on Windows.
+**Status: working on NVDA (2023.1+, Windows).** Built against the documented
+NVDA synth driver API (`WavePlayer.feed(onDone=...)`, `synthIndexReached`).
 
 ## Building the add-on
 
