@@ -21,7 +21,7 @@ every flag update, segment overrides, string instructions, etc.) where a
 subtle transcription bug produces a program that runs and does *something*
 plausible-looking rather than an obvious crash - exactly the failure mode
 that cost this project many iterations even with MAME's own mature,
-already-correct core (see the companion MAME driver's investigation notes and
+already-correct core (see `notes/investigation-audio-path.md` and
 `notes/phase1_findings.md` addenda #3/#4 for the history: an edge-triggering bug, a missing-EOI bug, an address-space-
 vs-state-lookup bug, and an interrupt-priority race all individually produced
 "looks like it's working" states that weren't).

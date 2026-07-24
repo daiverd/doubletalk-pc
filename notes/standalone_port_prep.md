@@ -140,8 +140,8 @@ The detailed memory map and hardware register findings (ROM base
 Peripheral Control Block relocation via RELREG at I/O port 0xFFA8 to
 0x9500, CPU-side port 0x00 = DAC byte / port 0x40 = TTS status byte with
 its SYNC/SYNC2/RDY/AF/AE bit layout) come from our own ROM disassembly and
-MAME driver work, not the manual - see the companion MAME driver's investigation
-notes and `driver/` in this repo. Not duplicated here.
+MAME driver work, not the manual - see `notes/investigation-audio-path.md` and
+`driver/` in this repo. Not duplicated here.
 
 ## Recommendations for the standalone port
 

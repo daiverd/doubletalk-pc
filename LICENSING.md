@@ -31,7 +31,7 @@ every part of the tree, what license applies and who holds the copyright.
 | `doubletalk/mame/endianness.h` | Vendored MAME utility | BSD-3-Clause | Aaron Giles, Vas Crabb |
 | `driver/dtlk.c`, `driver/dtlk.h` | Linux kernel DoubleTalk driver (reference) | **GPL-2.0** | Chris Pallotta, Jim Van Zandt |
 | `driver/speakup_dtlk.c` | Linux Speakup DoubleTalk driver (reference) | **GPL-2.0-or-later** | Kirk Reiser, David Borowski |
-| `docs/**`, `notes/**`, `*.md` | Our documentation and research notes | BSD-3-Clause | David Sexton |
+| `docs/**`, `notes/**`, `*.md` | Our documentation and research notes | BSD-3-Clause | David Sexton (except `notes/investigation-audio-path.md`: **Christopher Toth**) |
 | `doubletalkpc.bin` (the ROM) | DoubleTalk PC firmware | **Proprietary — not included** | RC Systems, Inc. |
 
 Every source file carries a matching `license:` / `copyright-holders:` header

@@ -436,7 +436,7 @@ to push before audio output is reachable.
 ## Phase 3 addendum #7 — collaborator (ctoth) root-caused the crash and got real audio working
 After addendum #6 left off (dictionary-decode crash, deep and unclear), collaborator
 `ctoth` picked up the investigation and made the actual breakthrough — full detail is in
-the companion MAME driver's investigation notes; this is a summary.
+`notes/investigation-audio-path.md`; this is a summary.
 
 **The crash was ours, not the firmware's.** The "bad far-call target" from addendum #6
 wasn't a dictionary-decoder bug at all: our own synthetic 1kHz INT0 timer (an engineering
