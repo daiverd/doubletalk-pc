@@ -1,0 +1,23 @@
+# Proprietary RC Systems firmware — user supplies their own, never commit
+rom/
+*.BIN
+*.bin
+
+# Firmware-derived artifacts (disassembly, dumps) — derivative works, do not commit
+notes/full_disasm.txt
+*.disasm
+
+# Vendor material (RC Systems datasheets, manuals, distribution utilities)
+docs/dtutils/
+docs/dtdoc/
+docs/*.pdf
+docs/*.zip
+
+# Build artifacts
+*.nvda-addon
+*.dll
+*.so
+*.o
+*.obj
+*.exe
+__pycache__/
