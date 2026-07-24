@@ -36,8 +36,10 @@ execution, and drive a MAME audio device with the ROM-derived phoneme stream.
   while the manuals specify 8 KiB and some developer material mentions 32 KiB
   variants.
 - External onboard CPU ports `0x00`, `0x40`, and `0x80` are unmapped.
-- Periodic INT0 frequency, interrupt priorities, forced unmasking, forced
-  `INSERV` clearing, and the 16 MHz CPU clock are not hardware-confirmed.
+- Periodic INT0 frequency, interrupt priorities, forced unmasking, and forced
+  `INSERV` clearing are not hardware-confirmed. (The CPU clock, guessed at
+  16 MHz here, has since been resolved to 10 MHz — 20 MHz XTAL / 2, per the
+  PC/104 hardware manual; see the CPU-subtype rows below and `PORTING.md`.)
 - There is no DoubleTalk sound device, DAC, or speaker route.
 - The user reports recognizable phonemes when ROM regions are interpreted at
   approximately 10 kHz. The exact offsets, encoding, and rate are not yet

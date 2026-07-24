@@ -43,7 +43,9 @@ companion MAME driver and this repo - not guesses.
 - 80C188EB (`I80C188EB` in `src/devices/cpu/i86/i186.h`), a real-mode 8-bit-bus
   member of the 80186 family with a *relocatable* Peripheral Control Block
   (PCB). Clock: 20MHz XTAL / 2 = 10MHz processor clock (see
-  `doubletalkpc.cpp`'s `device_add_mconfig`).
+  `doubletalkpc.cpp`'s `device_add_mconfig`). (An earlier investigation
+  snapshot guessed 16 MHz; that was superseded — the 10 MHz value is confirmed
+  by the PC/104 hardware manual. See `investigation-audio-path.md`.)
 - Reset vector at physical `0xFFFF0`; entry code far-jumps to `8000:0000`
   (physical `0x80000`) after a boot-time port write.
 
