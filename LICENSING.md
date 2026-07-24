@@ -1,8 +1,9 @@
 # Licensing & Attribution
 
-This repository aggregates code under a few different licenses, plus a
-proprietary firmware ROM that is **not included**. This document states, for
-every part of the tree, what license applies and who holds the copyright.
+Everything in this repository is **BSD-3-Clause** (our own code plus a vendored
+MAME CPU core), except a proprietary firmware ROM that is **not included**. This
+document states, for every part of the tree, what license applies and who holds
+the copyright.
 
 **Summary**
 
@@ -11,10 +12,9 @@ every part of the tree, what license applies and who holds the copyright.
   and don't use our names to endorse your product. It does **not** require you to
   open-source the rest of your project.
 - The **vendored CPU emulation** from MAME is also **BSD-3-Clause**.
-- The **Linux kernel driver** under `driver/` is **GPL-2.0** third-party code,
-  included only as hardware-interface reference. It is **not compiled into or
-  linked with** the BSD-licensed emulator, so its copyleft does not extend to
-  the rest of the repo (mere aggregation).
+- The card's **Linux kernel drivers** (`dtlk.c`, `speakup_dtlk.c`) were used as a
+  protocol reference during development but are **not included here** — they are
+  GPL-2.0 and live upstream in the Linux source (the notes link to them).
 - The **DoubleTalk firmware ROM is proprietary to RC Systems and is not
   distributed here.** You supply your own (see [The firmware ROM](#the-firmware-rom)).
 
@@ -29,14 +29,11 @@ every part of the tree, what license applies and who holds the copyright.
 | `doubletalk/nvda/**` | NVDA add-on driver, manifest, build script (our code) | BSD-3-Clause | David Sexton |
 | `doubletalk/mame/i86.*`, `i186.*`, `i86inline.h` | Vendored MAME 8086/80186 + 80C188EB CPU core | BSD-3-Clause | Carl; **Christopher Toth** (I80C188EB / EB Peripheral Control Block additions) |
 | `doubletalk/mame/endianness.h` | Vendored MAME utility | BSD-3-Clause | Aaron Giles, Vas Crabb |
-| `driver/dtlk.c`, `driver/dtlk.h` | Linux kernel DoubleTalk driver (reference) | **GPL-2.0** | Chris Pallotta, Jim Van Zandt |
-| `driver/speakup_dtlk.c` | Linux Speakup DoubleTalk driver (reference) | **GPL-2.0-or-later** | Kirk Reiser, David Borowski |
 | `docs/**`, `notes/**`, `*.md` | Our documentation and research notes | BSD-3-Clause | David Sexton (except `notes/investigation-audio-path.md`: **Christopher Toth**) |
 | `doubletalkpc.bin` (the ROM) | DoubleTalk PC firmware | **Proprietary — not included** | RC Systems, Inc. |
 
 Every source file carries a matching `license:` / `copyright-holders:` header
-(MAME-style `// license:` for C/C++, `# license:` for scripts/manifests, SPDX
-tags for the kernel files).
+(MAME-style `// license:` for C/C++, `# license:` for scripts/manifests).
 
 ## Original project code — BSD-3-Clause
 
@@ -58,16 +55,21 @@ EB-mode Peripheral Control Block support (the `i80c188eb_cpu_device`, the
 each file he modified, per MAME convention. `endianness.h` is © Aaron Giles and
 Vas Crabb. These files retain their original MAME headers verbatim.
 
-## Linux kernel driver — GPL-2.0 (third-party reference)
+## Protocol reference — the Linux kernel drivers (external, not included)
 
-`driver/dtlk.c` and `driver/dtlk.h` (GPL-2.0) and `driver/speakup_dtlk.c`
-(GPL-2.0-or-later) are the upstream Linux kernel drivers for the physical
-DoubleTalk card, included **only as a reference** for the card's I/O protocol.
-They are **not** part of the emulator build and are **not** linked with any
-BSD-licensed code here. Because they are merely stored alongside (not combined
-into a single program with) the BSD code, this is "mere aggregation" under the
-GPL and the GPL does **not** apply to the rest of the repository. If you reuse
-these specific files, GPL-2.0 terms apply to them.
+The card's host I/O protocol was reverse-engineered against the upstream Linux
+kernel drivers for the physical DoubleTalk card. Those drivers are **GPL-2.0 and
+are not included in this repository** — they live in the Linux source tree:
+
+- `drivers/char/dtlk.c` + `include/linux/dtlk.h` — the DoubleTalk PC/LT character
+  driver (© Chris Pallotta, Jim Van Zandt).
+- `drivers/accessibility/speakup/speakup_dtlk.c` — the Speakup driver
+  (© Kirk Reiser, David Borowski).
+
+Browse them at e.g.
+<https://elixir.bootlin.com/linux/v5.15/source/drivers/char/dtlk.c>. The notes
+cite these as the protocol ground truth; nothing here is built from or links
+against them, so the repository itself is entirely BSD-3-Clause.
 
 ## NVDA add-on — how BSD and GPL coexist
 

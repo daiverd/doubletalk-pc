@@ -4,9 +4,10 @@
 - ROM dump: `doubletalkpc.BIN`, 524288 bytes (512KB), md5
   `8c0f7a3bd294652486007e163c203434` (proprietary RC Systems firmware — supply your
   own; see LICENSING.md).
-- Linux kernel driver: `drivers/char/dtlk.c` + `include/linux/dtlk.h` (pulled from kernel
-  tag v6.12/v4.19, since the driver was removed from current `master` in the 7.2 cycle),
-  and `drivers/accessibility/speakup/speakup_dtlk.c`.
+- Linux kernel drivers (GPL-2.0, upstream — not included in this repo): the
+  DoubleTalk character driver `drivers/char/dtlk.c` + `include/linux/dtlk.h`, and
+  the Speakup driver `drivers/accessibility/speakup/speakup_dtlk.c`. Browse at e.g.
+  https://elixir.bootlin.com/linux/v5.15/source/drivers/char/dtlk.c
 - RC Systems official manual: `DoubleTalk PC/LT User's Manual` (dtdoc.zip, plain text,
   Copyright 1991-1997) — from rcsys.com/Downloads/dtdoc.zip.
 - RC8650/RC8660 chipset manuals (rc8650.pdf, rc8660.pdf, 2014/2015) — downloaded but not

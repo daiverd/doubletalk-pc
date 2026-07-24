@@ -32,7 +32,6 @@ MAME. See [`notes/`](notes/) for the full reverse-engineering write-up.
 | `doubletalk/dtalk.{cpp,h}` | C API over the board |
 | `doubletalk/dtalk_cli.cpp` | Command-line harness (boot trace, synthesize to WAV) |
 | `doubletalk/nvda/` | NVDA screen-reader add-on ([README](doubletalk/nvda/README.md)) |
-| `driver/` | Linux kernel DoubleTalk drivers — **GPL-2.0**, included only as protocol reference |
 | `notes/` | Reverse-engineering documentation |
 | `LICENSE`, `LICENSING.md` | License text and per-component licensing/attribution map |
 
@@ -100,10 +99,12 @@ redistribute (including commercially); just keep the copyright notice and don't
 use the authors' names to endorse derived products. It does **not** require you
 to open-source the rest of your project.
 
-The repository also contains third-party components under their own licenses
-(the vendored MAME core is BSD-3-Clause; the `driver/` Linux drivers are GPL-2.0
-and are not linked into the emulator). See **[LICENSING.md](LICENSING.md)** for a
-complete, per-file breakdown of licenses and copyright holders.
+The vendored MAME CPU core is also BSD-3-Clause, so **the entire repository is
+BSD-3-Clause**. (The card's protocol was reverse-engineered against the Linux
+kernel's DoubleTalk drivers, which are GPL-2.0 and live upstream — the notes
+link to them, but they are not included here.) See
+**[LICENSING.md](LICENSING.md)** for a complete, per-file breakdown of licenses
+and copyright holders.
 
 ## Credits
 
