@@ -22,8 +22,10 @@ pass on Windows.
        cp ../build/win32/dtalk.dll ../build/win64/dtalk64.dll synthDrivers/doubletalkpc/
        cp <rom>/doubletalkpc.bin  synthDrivers/doubletalkpc/
 
-   The firmware ROM is proprietary and not distributed here — fetch it per
-   `rusty_tts/scripts/fetch_roms.sh` (archive.org dump, CRC32 66685631).
+   The firmware ROM is proprietary to RC Systems and is not distributed here.
+   Supply your own dump (e.g. read it from a DoubleTalk PC card you own). Verify
+   it against CRC32 `66685631` / SHA1 `bf7e78d6381c76d291ee069971873347a314ffff`.
+   See LICENSING.md in the repository root.
 
 3. Zip it up (an `.nvda-addon` is just a zip with `manifest.ini` at the
    root):

@@ -12,9 +12,10 @@
 # Files expected next to this __init__.py:
 #   dtalk64.dll        - `make win64` (NVDA 2025.2+ is a 64-bit process)
 #   dtalk.dll          - `make win32` (older 32-bit NVDA)
-#   doubletalkpc.bin   - the 512KB firmware ROM (proprietary; fetch per
-#                        rusty_tts/scripts/fetch_roms.sh, not distributed
-#                        with the add-on)
+#   doubletalkpc.bin   - the 512KB firmware ROM (proprietary to RC Systems, not
+#                        distributed with the add-on). Supply your own dump;
+#                        verify CRC32 66685631 / SHA1
+#                        bf7e78d6381c76d291ee069971873347a314ffff.
 
 import ctypes
 import os

@@ -87,9 +87,16 @@ to RC Systems, Inc., carries no redistribution grant, and is not included in
 this repository or in any release artifact.** RC Systems is still an active
 company; do not treat this ROM as abandonware.
 
-To use the emulator you must supply the ROM yourself — for example by dumping it
-from a DoubleTalk PC card you own — and place it where the tools expect it (see
-the NVDA add-on README and the CLI usage). The NVDA driver's `check()` returns
-`False` when the ROM is absent, so a ROM-less install simply won't offer the
-synthesizer rather than crashing. **Do not commit the ROM** (the repository
-`.gitignore` blocks `*.bin` / `rom/` to help prevent this).
+Following standard MAME practice, this project **identifies the ROM by hash but
+never distributes it and gives no sourcing guidance.** You must supply the ROM
+yourself — for example by dumping it from a DoubleTalk PC card you own — and
+place it where the tools expect it (see the NVDA add-on README and the CLI
+usage). Verify your dump against:
+
+- **CRC32:** `66685631`
+- **SHA1:** `bf7e78d6381c76d291ee069971873347a314ffff`
+
+The NVDA driver's `check()` returns `False` when the ROM is absent, so a ROM-less
+install simply won't offer the synthesizer rather than crashing. **Do not commit
+the ROM** (the repository `.gitignore` blocks `*.bin` / `rom/` to help prevent
+this).
