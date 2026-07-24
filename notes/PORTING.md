@@ -12,8 +12,8 @@ are; the shim's own header comments cover the mechanics.
 
 ## Why this turned out to be bigger than the initial estimate
 
-The initial plan treated this like the existing `native/retrochip/` chips
-(votrax.cpp, sp0256.cpp, etc.) - hand-port ~300-2000 lines, done in one sitting.
+The initial plan treated this like the parent project's existing hand-ported
+chips (votrax.cpp, sp0256.cpp, etc.) - hand-port ~300-2000 lines, done in one sitting.
 On investigation, the CPU core itself is ~2600 (i86.cpp) + ~2200 (i186.cpp)
 lines, and unlike a synthesis chip's mostly-arithmetic state machine, a
 correct x86 CPU interpreter has a large surface area (every addressing mode,
@@ -21,9 +21,8 @@ every flag update, segment overrides, string instructions, etc.) where a
 subtle transcription bug produces a program that runs and does *something*
 plausible-looking rather than an obvious crash - exactly the failure mode
 that cost this project many iterations even with MAME's own mature,
-already-correct core (see `mame-doubletalk`'s `investigations/doubletalk-
-audio-path.md` and `doubletalk-pc`'s `notes/phase1_findings.md` addenda #3/#4
-for the history: an edge-triggering bug, a missing-EOI bug, an address-space-
+already-correct core (see the companion MAME driver's investigation notes and
+`notes/phase1_findings.md` addenda #3/#4 for the history: an edge-triggering bug, a missing-EOI bug, an address-space-
 vs-state-lookup bug, and an interrupt-priority race all individually produced
 "looks like it's working" states that weren't).
 
@@ -31,14 +30,14 @@ Recommendation for whoever picks this up: budget this as a real multi-session
 project (realistically comparable in size to the original MAME driver
 investigation, which took a full extended session with dozens of rebuild-test
 cycles), not a quick add-on. Validate *continuously* against the known-good
-MAME reference (build it, run `mame-doubletalk`'s
+MAME reference (build it, run the companion MAME driver's regression test
 `scripts/run_doubletalk_regression.py`, diff behavior) rather than writing the
 whole core and testing at the end.
 
 ## What's confirmed and can be used directly (no further RE needed)
 
 Everything below is extracted from currently-committed, working source in the
-`doubletalk` branches of `mame-doubletalk` and `doubletalk-pc` - not guesses.
+companion MAME driver and this repo - not guesses.
 
 ### CPU identity and clocking
 - 80C188EB (`I80C188EB` in `src/devices/cpu/i86/i186.h`), a real-mode 8-bit-bus
@@ -108,29 +107,27 @@ port 0x80   host-visible LPC status/data latch (ISA base+0). Firmware
   one, that's a signal your CPU core has a bug, not that the workaround
   is legitimate.
 
-### Text protocol (from `docs/dtdoc/Manual.txt`, `doubletalk-pc` repo)
+### Text protocol (from the RC Systems DoubleTalk PC/LT User's Manual)
 - Default mode ("Text mode"): speech does not begin until a CR (`0x0D`) or
   Null (`0x00`) byte is received - buffers everything up to that point as
   one utterance. A well-behaved sender polls the RDY bit (`0x10` of the TTS
   status byte) before every write.
 - Verified working end-to-end (independently, by ear) with both a single
-  short word and a 503-byte multi-sentence passage - see
-  `mame-doubletalk`'s `scripts/doubletalk_regression_declaration.lua` for
-  the exact byte sequence used (opening of the Declaration of Independence,
-  chosen arbitrarily as a long/real test phrase, nothing special about the
-  content) and `doubletalk-pc`'s `notes/phase1_findings.md` addendum #7 for
-  the listening-test writeup.
+  short word and a 503-byte multi-sentence passage - see the companion MAME
+  driver's `scripts/doubletalk_regression_declaration.lua` for the exact byte
+  sequence used (opening of the Declaration of Independence, chosen arbitrarily
+  as a long/real test phrase, nothing special about the content) and
+  `notes/phase1_findings.md` addendum #7 for the listening-test writeup.
 
 ## Peripheral Control Block reference (the hard part)
 
 Source: `i80186_cpu_device::internal_port_offset/internal_port_r/
 internal_port_w/update_interrupt_state/handle_eoi/external_int/
 restart_timer/internal_timer_sync/inc_timer/internal_timer_update/
-timer_elapsed/int_callback` in `src/devices/cpu/i86/i186.cpp` (this exact
-revision is on the `doubletalk` branch of `mame-doubletalk`, commit history
-includes ctoth's `I80C188EB` additions - diff against `torvalds`-equivalent
-upstream MAME if you want to isolate exactly what was added for EB support
-vs. pre-existing 80186 logic).
+timer_elapsed/int_callback` in `src/devices/cpu/i86/i186.cpp` (vendored here as
+`doubletalk/mame/i186.cpp`; its commit history in the companion MAME driver
+includes ctoth's `I80C188EB` additions - diff against upstream MAME if you want
+to isolate exactly what was added for EB support vs. pre-existing 80186 logic).
 
 ### Relocation register (RELREG)
 - I/O port `0xFFA8` at reset (`m_reloc` defaults to `0x00ff` for EB parts,
@@ -237,8 +234,8 @@ each). Control register bits (from `internal_timer_update`/`inc_timer`):
    working first, headless (no board at all) - validate it can at least
    execute the ROM's boot sequence up to the first `HLT` at physical
    `0x80101` and match the *exact* instruction trace already captured and
-   preserved in this project's history (see `full_disasm.txt` and the
-   trace excerpts embedded in `phase1_findings.md` addenda). This gives a
+   preserved in this project's history (see the trace excerpts embedded in
+   `phase1_findings.md` addenda). This gives a
    cheap, concrete, early correctness checkpoint before touching
    interrupts/timers/audio at all.
 2. Add the PCB/interrupt/timer subsystem from the reference above, and get
@@ -247,9 +244,9 @@ each). Control register bits (from `internal_timer_update`/`inc_timer`):
    already documented (e.g. `[14A0]` filling with the sent bytes).
 3. Add timer-driven INT0 and port-0x00 capture, get real audio out, and
    validate against the long-phrase regression test's pass criteria (see
-   `mame-doubletalk`'s `scripts/run_doubletalk_regression.py` - the same
+   the companion MAME driver's `scripts/run_doubletalk_regression.py` - the same
    phrase, the same two checks: no crash, real sustained audio).
-4. Only then wire into `retrochip`'s CLI and write the Python provider.
+4. Only then wire into the parent project's CLI and write the Python provider.
 
 ## Addendum: the LPC status/detection port (base+0, CPU port 0x80)
 

@@ -3,7 +3,7 @@
  *
  * dtalk.h - C API for the standalone RC Systems DoubleTalk PC emulator.
  *
- * Designed for both batch use (rusty_tts provider: queue text, drain PCM)
+ * Designed for both batch use (a host provider queues text, drains PCM)
  * and streaming screen-reader use (NVDA synth driver: incremental feed,
  * immediate stop, index markers, pull PCM as it is generated).
  *

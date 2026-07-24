@@ -1,8 +1,9 @@
 # Phase 1 Findings — DoubleTalk PC ROM Reconnaissance
 
 ## Sources used
-- ROM dump: archive.org `doubletalkpc` item, `doubletalkpc.BIN`, 524288 bytes (512KB),
-  md5 `8c0f7a3bd294652486007e163c203434` (matches archive.org metadata).
+- ROM dump: `doubletalkpc.BIN`, 524288 bytes (512KB), md5
+  `8c0f7a3bd294652486007e163c203434` (proprietary RC Systems firmware — supply your
+  own; see LICENSING.md).
 - Linux kernel driver: `drivers/char/dtlk.c` + `include/linux/dtlk.h` (pulled from kernel
   tag v6.12/v4.19, since the driver was removed from current `master` in the 7.2 cycle),
   and `drivers/accessibility/speakup/speakup_dtlk.c`.
@@ -121,8 +122,8 @@ This was the main open question in the brief, and it's now answered with high co
   options, `nI` index marker, `n*` DTMF generator, `nJ`/`J` tone generator, `T`/`nT` text
   mode, `C`/`nC` character mode, `D` phoneme mode, `#`/`n#` PCM mode, `?` interrogate,
   `L`/`U` load/enable exception dictionary, `@` reinitialize, `Z` zap commands.
-  Full command summary table is at the end of that section of the manual (line ~287 in
-  `docs/dtdoc/Manual.txt`) if we need exact parameter ranges later.
+  Full command summary table is at the end of that section of the manual if we
+  need exact parameter ranges later.
 - This manual does **not** cover ISA-specific hardware detail (jumper/base-address
   selection, register bit layout) — it's the software/command-protocol layer, written to
   be portable across DoubleTalk PC (ISA) and DoubleTalk LT (serial). For port-level detail
@@ -381,7 +382,7 @@ new, careful tracing rather than more ad-hoc pointer nudging, which risks produc
 misleading results by pushing the emulated state somewhere real firmware never goes.
 
 ## Phase 3 addendum #6 — CR trigger confirmed (per manual!), real synthesis engine engages, then crashes in dictionary decode
-Per the DoubleTalk PC/LT User's Manual (`docs/dtdoc/Manual.txt`, "TTS Operating Modes" /
+Per the DoubleTalk PC/LT User's Manual ("TTS Operating Modes" /
 "Text mode" section, not previously read closely): **"DoubleTalk will not begin
 speaking until it receives a CR (0Dh) or Null (00h) character - this ensures that
 sentence boundaries receive the proper inflection. This is the default operating
@@ -435,7 +436,7 @@ to push before audio output is reachable.
 ## Phase 3 addendum #7 — collaborator (ctoth) root-caused the crash and got real audio working
 After addendum #6 left off (dictionary-decode crash, deep and unclear), collaborator
 `ctoth` picked up the investigation and made the actual breakthrough — full detail is in
-`investigations/doubletalk-audio-path.md` in the `mame-doubletalk` repo, this is a summary.
+the companion MAME driver's investigation notes; this is a summary.
 
 **The crash was ours, not the firmware's.** The "bad far-call target" from addendum #6
 wasn't a dictionary-decoder bug at all: our own synthetic 1kHz INT0 timer (an engineering
@@ -487,7 +488,7 @@ artifacts, not card problems, confirmed by direct channel-by-channel inspection:
   DoubleTalk channel has speech; the "mixing" was purely coincidental timing when both
   channels get downmixed together by a naive player.
 
-**Regression test added** (`mame-doubletalk` repo, `scripts/run_doubletalk_regression.py`
+**Regression test added** (in the companion MAME driver repo: `scripts/run_doubletalk_regression.py`
 + `scripts/doubletalk_regression_declaration.lua`): sends the same long Declaration
 passage and asserts both (a) no crash — `CS` stays `0x8000`, all bytes sent, buffer
 pointers converge — and (b) real audio actually comes out (a sustained, non-trivial-

@@ -104,9 +104,8 @@ ROM_LOAD( "doubletalkpc.bin", 0x0000, 0x80000,
 
 This is exactly how every other MAME driver references copyrighted ROMs, so it
 is upstream-clean as written. The user supplies the dump themselves. Provenance
-note for the PR description: the dump used for development came from an
-archive.org copy (CRC32 66685631); include the SHA1 so MAME's audit tooling and
-any future redumper can verify. Do **not** attach the ROM to the PR or a
+note for the PR description: identify the dump by hash (CRC32 66685631) and
+include the SHA1 so MAME's audit tooling and any future redumper can verify. Do **not** attach the ROM to the PR or a
 softlist.
 
 ### 1.5 Practical reviewer checklist
@@ -277,8 +276,7 @@ distributed with the add-on" — the intent is right, the packaging doesn't matc
 it.
 
 **Fix for a public release:** ship the add-on **without** `doubletalkpc.bin`;
-have the user supply it (fetch per `scripts/fetch_roms.sh`, drop it next to
-`__init__.py`). Change `build_addon.sh` to exclude the ROM (and stop requiring
+have the user supply their own dump, dropped next to `__init__.py`. Change `build_addon.sh` to exclude the ROM (and stop requiring
 it), and document the manual ROM step in the readme.
 
 **The driver already degrades gracefully — confirmed by reading the code.**

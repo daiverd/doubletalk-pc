@@ -1,11 +1,10 @@
-# Standalone Port Prep — Learnings from the rusty_tts MAME-based Provider
+# Standalone Port Prep — Learnings from the MAME-based Provider
 
-Before writing a from-scratch (non-MAME) DoubleTalk implementation
-(`native/retrochip/doubletalk_notes/PORTING.md` in the rusty_tts repo), this
-collects what building and tuning the MAME-based provider taught us, plus
-what the real RC Systems manual (`docs/dtdoc/Manual.txt` in this repo)
-confirms about the official protocol - some of which we only knew from
-reverse-engineering before.
+Before writing a from-scratch (non-MAME) DoubleTalk implementation (the CPU-port
+plan lives with the parent TTS project), this collects what building and tuning
+the MAME-based provider taught us, plus what the real RC Systems DoubleTalk PC/LT
+User's Manual confirms about the official protocol - some of which we only knew
+from reverse-engineering before.
 
 ## The big architectural lesson: don't couple emulated time to wall-clock time
 
@@ -51,11 +50,11 @@ byte-in/audio-out interface.
 
 We'd reverse-engineered the RDY-gated host I/O protocol and the `<Ctrl+A>
 <digit>s` speed command from ROM/driver tracing before finding this repo
-already had the manual (`docs/dtdoc/Manual.txt`) checked in. It confirms
+already had the RC Systems DoubleTalk PC/LT User's Manual to hand. It confirms
 everything we found and fills in a lot more:
 
 - **Command format**: `<command character><param><letter>`. Default
-  command character is **Control-A (0x01)**, matches what rusty_tts's
+  command character is **Control-A (0x01)**, matches what the parent TTS project's
   backtick shortcut sends. It's *changeable* to any control character
   0x01-0x1A by sending `<current><new>`, and resettable unconditionally to
   Control-A via Control-^ (0x1E) at any time. To speak the command
@@ -95,7 +94,7 @@ From the manual's spec sheet (matches everything we found independently):
   Peripheral Control Block) that got real audio working in the first
   place.
 - **Memory**: 512K ROM + 8K RAM - matches our ROM dump size exactly.
-- **TTS synthesizer**: **3K input buffer**. rusty_tts's MAME provider caps
+- **TTS synthesizer**: **3K input buffer**. The parent TTS project's MAME provider caps
   input at 200 characters (`_mame_audio.py`'s `_MAX_TEXT_LEN`) - that's an
   arbitrary safety margin we chose, *not* a real hardware limit. Worth
   reconsidering for the standalone port, which could reasonably support up
@@ -130,10 +129,9 @@ Implication for the standalone port: this should be *reproduced*, not
 treated as a bug to eliminate - if the from-scratch CPU/DAC reset path
 naturally produces an equivalent click on cold start, that's a sign the
 init sequence is faithful to the real chip, not something to suppress.
-Downstream consumers (e.g. a rusty_tts provider built on the standalone
-core) will still want the same kind of leading-click trim rusty_tts's
-MAME provider already does, since it's not meaningful speech content
-either way.
+Downstream consumers (e.g. a provider built on the standalone core) will still
+want the same kind of leading-click trim the parent TTS project's MAME provider
+already does, since it's not meaningful speech content either way.
 
 ## What we did *not* re-derive here (already documented elsewhere)
 
@@ -142,9 +140,8 @@ The detailed memory map and hardware register findings (ROM base
 Peripheral Control Block relocation via RELREG at I/O port 0xFFA8 to
 0x9500, CPU-side port 0x00 = DAC byte / port 0x40 = TTS status byte with
 its SYNC/SYNC2/RDY/AF/AE bit layout) come from our own ROM disassembly and
-MAME driver work, not the manual - see `investigations/doubletalk-audio-path.md`
-and `driver/` in this repo, and `doubletalkpc.cpp`'s comments in the
-rusty_tts fork. Not duplicated here.
+MAME driver work, not the manual - see the companion MAME driver's investigation
+notes and `driver/` in this repo. Not duplicated here.
 
 ## Recommendations for the standalone port
 
@@ -155,7 +152,7 @@ rusty_tts fork. Not duplicated here.
 2. Support the full command set (Speed/Pitch/Volume/Voice/Articulation/
    Expression/Formant/Tone/Reverb), not just Speed - now that the wire
    format's confirmed, it's cheap to add all of them together, and it's a
-   real feature surface for rusty_tts callers beyond what the MAME-based
+   real feature surface for the parent TTS project callers beyond what the MAME-based
    provider currently exposes.
 3. Reconsider the 200-char input cap given the real 3K buffer.
 4. Once the port has independent reset/init behavior, check whether the
