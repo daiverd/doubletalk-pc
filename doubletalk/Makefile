@@ -1,3 +1,5 @@
+# license:BSD-3-Clause
+# copyright-holders:David Sexton
 # Standalone DoubleTalk PC emulator (vendored MAME 80C188EB core + shim)
 CXX ?= g++
 CXXFLAGS ?= -O2 -g

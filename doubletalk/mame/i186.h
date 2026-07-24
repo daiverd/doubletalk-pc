@@ -1,5 +1,5 @@
 // license:BSD-3-Clause
-// copyright-holders:Carl
+// copyright-holders:Carl, Christopher Toth
 #ifndef MAME_CPU_I86_I186_H
 #define MAME_CPU_I86_I186_H
 

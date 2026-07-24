@@ -41,5 +41,5 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 NOT INCLUDED and never distributable with this software: the DoubleTalk PC
 firmware ROM (doubletalkpc.bin), which is proprietary to RC Systems, Inc.
-Users must obtain it themselves (see scripts/fetch_roms.sh in the
-repository root).
+Users must obtain it themselves (e.g. by dumping it from DoubleTalk PC
+hardware they own). See LICENSING.md in the repository root.

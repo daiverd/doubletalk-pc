@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# license:BSD-3-Clause
+# copyright-holders:David Sexton
 # Package the NVDA add-on. Requires the DLLs already placed in
 # synthDrivers/doubletalkpc/ (see README.md).
 #

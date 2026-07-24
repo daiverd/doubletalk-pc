@@ -1,5 +1,5 @@
 // license:BSD-3-Clause
-// copyright-holders:Carl
+// copyright-holders:Carl, Christopher Toth
 // Peripheral code from rmnimbus driver by Phill Harvey-Smith which is
 // based on the Leland sound driver by Aaron Giles and Paul Leaman
 
