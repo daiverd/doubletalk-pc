@@ -198,11 +198,19 @@ class SynthDriver(SynthDriver):
 		# (16-bit PCM is signed little-endian), so feed its bytes straight
 		# through. This matches the cleaner MAME reference rather than the raw
 		# 8-bit DAC staircase.
+		# NVDA 2025.1 moved the output device setting from the "speech" config
+		# section to "audio" (also changing its value from a device name to an
+		# endpoint ID). Each era's WavePlayer expects its own era's value, so
+		# read whichever key this NVDA has.
+		try:
+			outputDevice = config.conf["audio"]["outputDevice"]
+		except KeyError:
+			outputDevice = config.conf["speech"]["outputDevice"]
 		self._player = nvwave.WavePlayer(
 			channels=1,
 			samplesPerSec=int(self._dt.sample_rate),
 			bitsPerSample=16,
-			outputDevice=config.conf["audio"]["outputDevice"],
+			outputDevice=outputDevice,
 		)
 		self._rate = 50
 		self._rateBoost = False
