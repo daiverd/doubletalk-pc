@@ -35,6 +35,29 @@ _DIR = os.path.dirname(__file__)
 
 SAMPLES_PER_CHUNK = 2048
 
+# Bottom of the slider range for every card setting that is natively 0-9.
+# The sliders run CARD_MIN_PCT..100 in steps of 10 - ten stops for ten card
+# values - so each arrow-key press moves exactly one card step. Starting at 0
+# instead would give eleven stops for ten values and leave the top two (90 and
+# 100) both meaning 9, a dead step at the end of every slider.
+CARD_MIN_PCT = 10
+
+
+def _rateSetting():
+	# NVDA's SynthDriver.RateSetting()/VolumeSetting() factories expose only
+	# minStep, but they return a plain NumericDriverSetting whose minVal is an
+	# ordinary attribute. Build via the factory and adjust, so these two keep
+	# NVDA's own translated display names instead of hardcoded English.
+	s = SynthDriver.RateSetting(minStep=10)
+	s.minVal = CARD_MIN_PCT
+	return s
+
+
+def _volumeSetting():
+	s = SynthDriver.VolumeSetting(minStep=10)
+	s.minVal = CARD_MIN_PCT
+	return s
+
 
 class _DtalkIndexMark(ctypes.Structure):
 	_fields_ = [("value", ctypes.c_uint8), ("sample_pos", ctypes.c_uint64)]
@@ -96,25 +119,25 @@ class SynthDriver(SynthDriver):
 
 	supportedSettings = (
 		SynthDriver.VoiceSetting(),
-		# The card's nS speed is natively 0-9, so give the 0-100 slider a coarse
-		# minStep=10: each arrow-key press moves one real card step (11 stops ->
-		# card 0-9, top two both 9) instead of landing in dead zones where many
-		# slider positions collapse to the same nS value. 50% stays the
-		# omit-at-default midpoint (-> nS 5, the card default).
-		SynthDriver.RateSetting(minStep=10),
+		# The card's nS speed is natively 0-9, so the slider runs 10-100 in
+		# steps of 10: ten stops for ten card values, one real card step per
+		# arrow-key press, no position collapsing onto another. 60 is the
+		# omit-at-default midpoint (-> nS 5, the card default). See
+		# _map0to9 for why the range starts at 10 rather than 0.
+		_rateSetting(),
 		# Faster-than-9S speech for power screen-reader use. OFF = the card's
-		# authentic nS 0-9 range (rate slider maps 0-100 -> nS 0-9). ON rescales
+		# authentic nS 0-9 range (rate slider maps 10-100 -> nS 0-9). ON rescales
 		# the firmware rate table so the same slider positions run faster
 		# (~1.8x at the top), pitch unchanged. See _set_rateBoost.
 		SynthDriver.RateBoostSetting(),
 		SynthDriver.PitchSetting(),
-		# nV volume is also 0-9; same coarse step so each press = one card step.
-		SynthDriver.VolumeSetting(minStep=10),
+		# nV volume is also 0-9; same 10-100 range so each press = one card step.
+		_volumeSetting(),
 		# Reconstruction-filter corner of the modeled output stage, 2-5kHz.
 		# See _filters for what each entry means and why 5kHz is the ceiling.
 		DriverSetting("filter", "&Filter", availableInSettingsRing=True, defaultVal="3800"),
 		# Voice-quality knobs from the DoubleTalk PC/LT manual (Table 8). All are
-		# native 0-9 (except tone, 0-2), presented as 0-100 sliders with the same
+		# native 0-9 (except tone, 0-2), presented as 10-100 sliders with the same
 		# coarse minStep=10 as rate/volume so each step = one card value. These six
 		# are VOICE-LINKED: selecting a voice snaps them to that voice's firmware
 		# preset so the sliders reflect what is actually heard (WYSIWYG), and each
@@ -123,18 +146,23 @@ class SynthDriver(SynthDriver):
 		# defaultVal here is voice 0 (Perfect Paul)'s preset, the startup voice.
 		# Tone (nX) is a 3-way (bass/normal/treble) so it is a combo, like Filter.
 		DriverSetting("tone", "&Tone", availableInSettingsRing=True, defaultVal="1"),
-		# nA articulation 0-9, default 5A. Low = slurred, high = choppy.
+		# nA articulation 0-9, default 5A (slider 60). Low = slurred, high = choppy.
 		NumericDriverSetting("articulation", "&Articulation",
-			availableInSettingsRing=True, defaultVal=50, minStep=10),
-		# nE expression (intonation) 0-9, default 5E. 0 = monotone, 9 = animated.
+			availableInSettingsRing=True, defaultVal=60,
+			minVal=CARD_MIN_PCT, minStep=10),
+		# nE expression (intonation) 0-9, default 5E (slider 60). 0 = monotone.
 		NumericDriverSetting("expression", "&Expression",
-			availableInSettingsRing=True, defaultVal=50, minStep=10),
-		# nF formant frequency 0-9, default 5F. Shifts overall vocal-tract voicing.
+			availableInSettingsRing=True, defaultVal=60,
+			minVal=CARD_MIN_PCT, minStep=10),
+		# nF formant frequency 0-9, default 5F (slider 60). Shifts vocal-tract
+		# voicing - on this card it is a DAC sample-clock (varispeed) control.
 		NumericDriverSetting("formant", "&Formant frequency",
-			availableInSettingsRing=True, defaultVal=50, minStep=10),
-		# nR reverb 0-9, default 0R (none). Higher = more reverb delay/effect.
+			availableInSettingsRing=True, defaultVal=60,
+			minVal=CARD_MIN_PCT, minStep=10),
+		# nR reverb 0-9, default 0R (none, slider 10). Higher = more reverb.
 		NumericDriverSetting("reverb", "Re&verb",
-			availableInSettingsRing=True, defaultVal=0, minStep=10),
+			availableInSettingsRing=True, defaultVal=CARD_MIN_PCT,
+			minVal=CARD_MIN_PCT, minStep=10),
 	)
 	supportedCommands = {IndexCommand, PitchCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
@@ -222,14 +250,14 @@ class SynthDriver(SynthDriver):
 			bitsPerSample=16,
 			outputDevice=outputDevice,
 		)
-		self._rate = 50
+		self._rate = 60  # -> nS 5, the card default
 		self._rateBoost = False
 		# The boost level applied when rateBoost is ON: the strongest the DLL
 		# reports as verified-safe (pitch-stable, monotonic, no fault at any
 		# nS 0-9). OFF sends level 0 (authentic table).
 		self._boostOnLevel = int(self._dt.lib.dtalk_rate_boost_max())
-		self._pitch = 50
-		self._volume = 50
+		self._pitch = 50  # pitch is card 0-99, a full-range slider (see _mapPitch)
+		self._volume = 60  # -> nV 5, the card default
 		self._voice = "0"
 		self._filter = "3800"
 		# True only while NVDA is restoring saved settings (see loadSettings). It
@@ -239,15 +267,15 @@ class SynthDriver(SynthDriver):
 		self._restoring = False
 		# Voice-quality settings, stored as their 0-100 slider value (tone as its
 		# card string). Initial values are voice 0 (Perfect Paul)'s firmware preset
-		# converted to slider units (articulation/expression/formant card 5 -> 50,
-		# reverb card 0 -> 0, tone card 1 -> "1"); at these values _prefix emits
+		# converted to slider units (articulation/expression/formant card 5 -> 60,
+		# reverb card 0 -> 10, tone card 1 -> "1"); at these values _prefix emits
 		# nothing for voice 0 and its preset shows through. On an interactive voice
 		# change _set_voice re-snaps all six to the new voice's preset.
 		self._tone = "1"
-		self._articulation = 50
-		self._expression = 50
-		self._formant = 50
-		self._reverb = 0
+		self._articulation = self._card0to9ToNvda(5)
+		self._expression = self._card0to9ToNvda(5)
+		self._formant = self._card0to9ToNvda(5)
+		self._reverb = self._card0to9ToNvda(0)
 		# marker number (0-99, rolling) -> NVDA index value
 		self._markMap = {}
 		self._nextMark = 0
@@ -305,11 +333,11 @@ class SynthDriver(SynthDriver):
 		pitch, articulation, formant, tone, expression, reverb = \
 			self._voicePresets[value]
 		self._pitch = self._cardPitchToNvda(pitch)
-		self._articulation = articulation * 10
-		self._formant = formant * 10
+		self._articulation = self._card0to9ToNvda(articulation)
+		self._formant = self._card0to9ToNvda(formant)
 		self._tone = str(tone)
-		self._expression = expression * 10
-		self._reverb = reverb * 10
+		self._expression = self._card0to9ToNvda(expression)
+		self._reverb = self._card0to9ToNvda(reverb)
 
 	def _getAvailableVoices(self):
 		return self._voices
@@ -411,12 +439,26 @@ class SynthDriver(SynthDriver):
 		# to a voice preset so it reflects the pitch the card will actually use.
 		return int(round(p * 100 / 99))
 
+	# The card's 0-9 settings are presented as NVDA sliders running 10-100 in
+	# steps of 10 (see CARD_MIN_PCT). That is exactly ten stops for ten card
+	# values, so every arrow-key press moves one real card step and no two
+	# positions collapse onto the same value. The obvious 0-100 range would
+	# give eleven stops for ten values, leaving 90 and 100 both meaning 9 -
+	# a dead step at the top of every slider.
+
 	@staticmethod
 	def _map0to9(pct):
-		# NVDA 0-100 -> card 0-9. 50 -> 5 (the card's default speed/volume),
-		# 90+ -> 9. Plain rounding would give 4 at 50 (banker's rounding of 4.5),
-		# missing the card default, so scale so 50 lands exactly on 5.
-		return min(9, pct * 10 // 100)
+		# NVDA slider 10-100 -> card 0-9 (10 -> 0, 60 -> 5, 100 -> 9).
+		# Clamped rather than trusted: a config saved by a build from before
+		# the range changed can still hold values below 10, which would
+		# otherwise produce a negative card value and a malformed command.
+		return max(0, min(9, pct // 10 - 1))
+
+	@staticmethod
+	def _card0to9ToNvda(v):
+		# Card 0-9 -> NVDA slider units, the inverse of _map0to9. Used to snap
+		# the voice-linked sliders to a firmware preset.
+		return (v + 1) * 10
 
 	def _prefix(self, pitchOverride=None):
 		# nS speed 0-9, nP pitch 0-99, nV volume 0-9, nO voice 0-7.
@@ -431,18 +473,20 @@ class SynthDriver(SynthDriver):
 		# differs from THIS voice's preset (an untouched voice emits nothing but
 		# nO; a value the user moved off-preset is emitted absolutely, never
 		# re-flattened to a global default). Rate/Volume are NOT voice-linked
-		# (nS/nV are constant across voices) so they keep the global omit-at-50%
-		# rule. pitchOverride forces an absolute nP (capital-letter pitch changes).
+		# (nS/nV are constant across voices) so they keep the global omit-at-
+		# default rule - now slider 60, the stop that maps to the card's own
+		# default of 5. pitchOverride forces an absolute nP (capital-letter
+		# pitch changes).
 		presetPitch, presetArtic, presetFormant, presetTone, presetExpr, \
 			presetReverb = self._voicePresets[self._voice]
 		parts = ["\x01%sO" % self._voice]
-		if self._rate != 50:
+		if self._map0to9(self._rate) != 5:
 			parts.append("\x01%dS" % self._map0to9(self._rate))
 		if pitchOverride is not None:
 			parts.append("\x01%dP" % self._mapPitch(pitchOverride))
 		elif self._mapPitch(self._pitch) != presetPitch:
 			parts.append("\x01%dP" % self._mapPitch(self._pitch))
-		if self._volume != 50:
+		if self._map0to9(self._volume) != 5:
 			parts.append("\x01%dV" % self._map0to9(self._volume))
 		# Voice-quality overrides (after nO, like S/P/V): emitted only when moved
 		# off the current voice's preset so the preset shows through untouched.
