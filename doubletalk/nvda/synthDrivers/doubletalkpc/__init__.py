@@ -110,9 +110,9 @@ class SynthDriver(SynthDriver):
 		SynthDriver.PitchSetting(),
 		# nV volume is also 0-9; same coarse step so each press = one card step.
 		SynthDriver.VolumeSetting(minStep=10),
-		# Reconstruction-filter corner of the modeled output stage: the card's
-		# datasheet-recommended 3kHz (authentic) vs a brighter 4.8kHz.
-		DriverSetting("filter", "&Filter", availableInSettingsRing=True, defaultVal="3000"),
+		# Reconstruction-filter corner of the modeled output stage, 2-5kHz.
+		# See _filters for what each entry means and why 5kHz is the ceiling.
+		DriverSetting("filter", "&Filter", availableInSettingsRing=True, defaultVal="3800"),
 		# Voice-quality knobs from the DoubleTalk PC/LT manual (Table 8). All are
 		# native 0-9 (except tone, 0-2), presented as 0-100 sliders with the same
 		# coarse minStep=10 as rate/volume so each step = one card value. These six
@@ -139,9 +139,19 @@ class SynthDriver(SynthDriver):
 	supportedCommands = {IndexCommand, PitchCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
+	# Reconstruction low-pass corners offered to the user. 3800 is the default
+	# and reproduces the voice this driver has always shipped; 3000 is the
+	# RC8650/8660 datasheets' own recommended output filter, which since the
+	# resampler started interpolating sounds darker than the card rather than
+	# matching it. 5000 is the highest the output stage can do - it runs at
+	# 10504 Hz, so above the 5252 Hz Nyquist the biquad is unstable, which is
+	# why there is no 6 kHz or 8 kHz entry (see dtalk.h dtalk_set_lowpass_hz).
 	_filters = {
+		"2000": StringParameterInfo("2000", "Muffled (2 kHz)"),
 		"3000": StringParameterInfo("3000", "Classic (3 kHz)"),
+		"3800": StringParameterInfo("3800", "Default (3.8 kHz)"),
 		"4800": StringParameterInfo("4800", "Wide (4.8 kHz)"),
+		"5000": StringParameterInfo("5000", "Widest (5 kHz)"),
 	}
 
 	# nX tone: bass (0X), normal (1X, default), treble (2X) - like a stereo's
@@ -221,7 +231,7 @@ class SynthDriver(SynthDriver):
 		self._pitch = 50
 		self._volume = 50
 		self._voice = "0"
-		self._filter = "3000"
+		self._filter = "3800"
 		# True only while NVDA is restoring saved settings (see loadSettings). It
 		# guards _set_voice: a config restore/init must NOT snap the six voice-
 		# linked settings to the voice preset (that would clobber a user's saved
