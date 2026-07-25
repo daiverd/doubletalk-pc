@@ -15,6 +15,16 @@ NVDA synth driver API (`WavePlayer.feed(onDone=...)`, `synthIndexReached`).
 
        make -C .. windows        # needs g++-mingw-w64-i686 and g++-mingw-w64-x86-64
 
+   The Makefile links `-static` so the result depends on nothing but
+   `KERNEL32.dll` and `msvcrt.dll`. This matters if you build the DLLs by
+   hand: Debian ships mingw-w64 in two thread models (`update-alternatives
+   --config x86_64-w64-mingw32-g++`), and under the *posix* one
+   `-static-libgcc -static-libstdc++` still leaves a dependency on
+   `libwinpthread-1.dll`. NVDA users have no mingw runtime, so that shows up
+   as the driver silently failing to load. Check with:
+
+       x86_64-w64-mingw32-objdump -p dtalk64.dll | grep 'DLL Name'
+
 2. Copy the pieces into the driver directory:
 
        cp ../build/win32/dtalk.dll ../build/win64/dtalk64.dll synthDrivers/doubletalkpc/

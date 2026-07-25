@@ -40,7 +40,20 @@ clean:
 # process (dtalk64.dll); older NVDA is 32-bit (dtalk.dll) - the driver
 # loads whichever matches its process at runtime. Needs
 # g++-mingw-w64-x86-64 and/or g++-mingw-w64-i686.
-MINGW_FLAGS = -std=c++20 -O2 -Ishim -Imame -Wall -DDTALK_DLL -DDTALK_BUILD
+#
+# The DLL must not depend on any mingw runtime: NVDA users have no mingw
+# installation, and a missing libwinpthread-1.dll shows up as the driver
+# silently failing to load. -static-libgcc/-static-libstdc++ alone are NOT
+# enough - Debian ships mingw-w64 in two thread models, selectable with
+# update-alternatives, and under the *posix* model libstdc++ pulls in
+# libwinpthread-1.dll, which neither of those flags covers. Plain -static
+# does cover it. Under the *win32* model it is a no-op (byte-for-byte the
+# same DLL, modulo the PE timestamp), so it is safe to pass unconditionally
+# rather than probing which alternative the builder happens to have selected.
+# This project's own code uses no threads; the dependency comes entirely
+# from libstdc++'s posix build.
+MINGW_FLAGS = -std=c++20 -O2 -Ishim -Imame -Wall -DDTALK_DLL -DDTALK_BUILD \
+	-static -static-libgcc -static-libstdc++
 WIN_SRCS = shim/emu.cpp mame/i86.cpp mame/i186.cpp doubletalk_board.cpp dtalk.cpp
 WIN_DEPS = shim/emu.h dtalk.h doubletalk_board.h $(WIN_SRCS)
 
@@ -50,12 +63,12 @@ windows: win32 win64
 
 build/win32/dtalk.dll: $(WIN_DEPS)
 	mkdir -p build/win32
-	i686-w64-mingw32-g++ $(MINGW_FLAGS) -shared -static-libgcc -static-libstdc++ \
+	i686-w64-mingw32-g++ $(MINGW_FLAGS) -shared \
 		-o $@ $(WIN_SRCS) -Wl,--out-implib,build/win32/dtalk.lib
 
 build/win64/dtalk64.dll: $(WIN_DEPS)
 	mkdir -p build/win64
-	x86_64-w64-mingw32-g++ $(MINGW_FLAGS) -shared -static-libgcc -static-libstdc++ \
+	x86_64-w64-mingw32-g++ $(MINGW_FLAGS) -shared \
 		-o $@ $(WIN_SRCS) -Wl,--out-implib,build/win64/dtalk64.lib
 
 .PHONY: all clean win32 win64 windows
