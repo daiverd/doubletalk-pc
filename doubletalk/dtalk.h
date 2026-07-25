@@ -112,13 +112,20 @@ DTALK_API size_t dtalk_synth16(dtalk *dt, int16_t *out, size_t max_samples);
  * headroom gain, the Direct-Form-I biquad topology) is unchanged; only the
  * low-pass corner moves.
  *
- * The default is 3000 Hz - the RC8650/RC8660 datasheets' own recommended
- * "3 kHz Low-Pass Filter" output stage, i.e. the authentic card sound, and
- * the value MAME's resampler spectrally matches. Passing 0 restores that
- * default. Higher corners (up to a sensible fraction of the ~10.5kHz Nyquist
- * headroom) trade that authenticity for brightness by letting more of the
- * DAC's high-frequency content through; the argument is clamped to the
- * range 500..5000 Hz.
+ * The default is 3800 Hz, the corner that reproduces this synth's long-standing
+ * voice now that the sample-rate conversion feeding the output stage
+ * interpolates rather than holding (see LPF_HZ in dtalk.cpp for the
+ * measurements). 3000 Hz remains available and is the RC8650/RC8660 datasheets'
+ * own recommended "3 kHz Low-Pass Filter" output stage; against an
+ * interpolated stream it now sounds distinctly darker than the card. Passing 0
+ * restores the default.
+ *
+ * Lower corners muffle; higher ones brighten by letting more of the DAC's
+ * high-frequency content through. The argument is clamped to 500..5000 Hz.
+ * The upper bound is not a matter of taste: the output stage runs at
+ * ~10504 Hz, so above its 5252 Hz Nyquist the biquad's bilinear prewarp folds
+ * and the filter becomes unstable. Values such as 8000 are not meaningful
+ * here, and 5000 is already close to no filtering at all.
  *
  * Safe to call mid-stream: the filter's sample history is preserved, only
  * the coefficients are swapped, so changing the setting while speaking does

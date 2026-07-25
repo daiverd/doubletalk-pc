@@ -12,8 +12,9 @@
 
 namespace {
 
-// Firmware timer cadence: one DAC write per 952 CPU cycles (measured).
-constexpr u32 SAMPLE_RATE = doubletalk_board::CPU_HZ / 952; // 10504
+// Firmware timer cadence: one DAC write per ~952 CPU cycles (measured mean;
+// the real period jitters 907..998 - see doubletalk_board.h DAC_ISR_CYCLES).
+constexpr u32 SAMPLE_RATE = doubletalk_board::DAC_HZ; // 10504
 
 // ---- modeled output stage (dtalk_synth16) ----------------------------------
 // Reproduces what the MAME ISA-card build does to the identical raw DAC bytes
@@ -33,22 +34,53 @@ constexpr u32 SAMPLE_RATE = doubletalk_board::CPU_HZ / 952; // 10504
 //     high-pass removes the standing DC offset that causes those clicks.
 constexpr double DT_PI = 3.14159265358979323846; // DT_PI is not portable (mingw -std=c++20)
 constexpr double DC_BLOCK_HZ = 20.0;    // one-pole high-pass corner
-constexpr double LPF_HZ = 3000.0;       // default reconstruction low-pass corner.
-                                        // Chosen by measurement: matching the
-                                        // MAME reference's spectral tilt (its
-                                        // resampler drops the raw HF-energy
-                                        // ratio from 0.127 to 0.096) needs a
-                                        // ~2.8-3.0kHz corner. This coincides
-                                        // with the RC8650/8660 datasheets' own
-                                        // recommended output filter, captioned
-                                        // "Low Cost 3 kHz Low-Pass Filter" - so
-                                        // MAME and the real card's spec agree.
+// Default reconstruction low-pass corner.
+//
+// This corner has to do two jobs at once: stand in for the card's own analog
+// output filter, and clean up whatever the sample-rate conversion in
+// pull_samples() leaves behind. It was originally 3000, measured against the
+// MAME reference when pull_samples() emitted a zero-order-hold staircase -
+// and 3000 also happened to be the RC8650/8660 datasheets' recommended output
+// stage ("Low Cost 3 kHz Low-Pass Filter"), which read as independent
+// confirmation.
+//
+// That agreement did not survive pull_samples() becoming an interpolating
+// resampler. Interpolation already removes about half the staircase's HF
+// energy (raw energy above 3kHz: 0.0287 zero-order-hold -> 0.0142 interpolated),
+// so at 3000 the reconstruction filtering now happens twice and the voice comes
+// out audibly darker than the card. Re-measured against the same MAME reference
+// (mame doubletalk branch, scripts/doubletalk_regression_declaration.lua, DAC on
+// the capture's RIGHT channel - LEFT is the PC speaker), spectral tilt of the
+// 2-5kHz band against 0.3-2kHz over 215 speech frames:
+//
+//     MAME reference          -7.57 dB   (the target)
+//     zero-order-hold @ 3000  -8.87 dB   (what this used to ship)
+//     interpolated @ 3000    -10.32 dB   (too dark - double-filtered)
+//     interpolated @ 3800     -8.91 dB   (within 0.04 dB of the old voice)
+//     interpolated @ 4800     -8.41 dB   (closest to MAME, brightest)
+//
+// 3800 is the value that keeps the shipped voice exactly where it was, so the
+// resampler fix lands without a tonal change. Note no corner reaches MAME's
+// -7.57: the model is ~1.3 dB darker than the reference either way, and the
+// datasheet's 3 kHz is no longer the matching value, so the two references
+// genuinely disagree now.
+constexpr double LPF_HZ = 3800.0;
 constexpr double HEADROOM_GAIN = 0.5;   // MAME's DAC output route
                                         // (add_route(ALL_OUTPUTS,"mono",0.5))
-// User-selectable low-pass corner bounds (dtalk_set_lowpass_hz). 3000 is the
-// authentic datasheet default; the NVDA driver's "Wide" preset uses 4800.
+// User-selectable low-pass corner bounds (dtalk_set_lowpass_hz).
+//
+// The ceiling is a hard constraint, not taste. The output stage runs at
+// SAMPLE_RATE (10504Hz), so its Nyquist is 5252Hz, and set_lowpass()'s bilinear
+// prewarp tan(pi*hz/SAMPLE_RATE) diverges there and goes NEGATIVE above it -
+// which yields a biquad whose poles sit outside the unit circle. Asking for
+// 6000 or 8000 does not give a gentler filter, it gives an unstable one.
+// 5000 (0.476 * SAMPLE_RATE) is the practical ceiling and is already close to
+// no filtering at all: |H| at 5kHz is 0.707 there, and the raw stream carries
+// only 0.0014 of its energy above 4kHz, so 4800 and 5000 measure identically.
 constexpr double LPF_HZ_MIN = 500.0;
 constexpr double LPF_HZ_MAX = 5000.0;
+static_assert(LPF_HZ_MAX < doubletalk_board::DAC_HZ / 2,
+	"low-pass corner must stay below Nyquist or the biquad goes unstable");
 
 // Firmware text-buffer read/write pointers in CPU RAM (same addresses the
 // MAME capture.lua watched): equal <=> input buffer fully consumed.
