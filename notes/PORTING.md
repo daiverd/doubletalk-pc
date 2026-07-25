@@ -6,7 +6,8 @@ hand-transcription this document was bracing for: the five CPU core files
 compile unmodified against `shim/emu.h`, so the transcription-bug failure
 mode described below never applied. Every reference fact in this document
 was validated against the working port (first-HLT checkpoint, RELREG
-behavior, 952-cycle timer cadence, read-triggered INT1 deassert). This
+behavior, 952-cycle timer cadence - since refined, see
+`notes/audio-resampling.md` - read-triggered INT1 deassert). This
 file remains useful as the map of *why* the pieces are shaped the way they
 are; the shim's own header comments cover the mechanics.
 
@@ -229,7 +230,9 @@ each). Control register bits (from `internal_timer_update`/`inc_timer`):
   `10,000,000 / 10,500 ≈ 952` cycles between interrupts - useful as a
   sanity check once the timer port-write trace is captured from a real
   run (verify, don't assume this number is exactly what the firmware
-  programs).
+  programs). The caution was warranted: 952 turned out to be a *mean* at
+  the default formant setting, not a constant, and the `nF` command
+  retunes it over 9883..11060Hz. See `notes/audio-resampling.md`.
 
 ## Suggested next-session plan
 1. Get a minimal general 8086/80186 real-mode instruction interpreter
