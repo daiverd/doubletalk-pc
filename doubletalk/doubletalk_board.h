@@ -53,6 +53,27 @@ class doubletalk_board
 public:
 	static constexpr u32 XTAL_HZ = 20000000;      // stock 20MHz crystal
 	static constexpr u32 CPU_HZ = XTAL_HZ / 2;    // 10MHz processor clock
+	// Firmware timer-ISR cadence at the default formant setting (5F): one
+	// port-0x00 DAC write per ~952 CPU cycles. 952 is the MEAN, not a
+	// constant - measured over 19,990 intervals of real speech the period
+	// ranges 907..998 cycles (mean 951.999, std 5.35, 43 distinct values;
+	// the modal 952 is only 15% of them). That spread is the firmware's own
+	// interrupt latency, and it is jitter rather than drift.
+	//
+	// The MEAN moves, though: the nF formant-frequency command is implemented
+	// purely as a DAC sample-clock change - varispeed. Measured, the timer
+	// reload is 952 - 12*(F-5), and the emitted sample VALUES are byte
+	// identical across all ten settings:
+	//
+	//     F=0  1012 cycles   9882.8 Hz      F=7   928 cycles  10775.1 Hz
+	//     F=2   988 cycles  10122.3 Hz      F=9   904 cycles  11060.4 Hz
+	//     F=5   952 cycles  10504.1 Hz  (default)
+	//
+	// nF is the only command that does this; A/B/E/P/R/S/V/X all hold
+	// 951.999 cycles and change the samples instead. So the board's output
+	// rate is NOT fixed, and pull_samples() must genuinely resample.
+	static constexpr u32 DAC_ISR_CYCLES = 952;
+	static constexpr u32 DAC_HZ = CPU_HZ / DAC_ISR_CYCLES; // 10504
 	static constexpr u32 RAM_SIZE = 0x20000;      // 128KB (generous placeholder)
 	static constexpr u32 ROM_BASE = 0x80000;
 	static constexpr u32 ROM_SIZE = 0x80000;
@@ -95,8 +116,15 @@ public:
 	const std::deque<std::pair<s64, u8>> &dac_events() const { return m_dac_events; }
 
 	// Index-marker events (cycle, marker number) from firmware port 0x80
-	// writes; consumer drains this.
+	// writes; consumer drains this. Cycles, not sample counts: the output
+	// grid is a fixed rate the caller chooses while the DAC clock varies with
+	// the formant setting, so cycles are the only stable axis both sides
+	// agree on.
 	std::deque<std::pair<s64, u8>> &index_events() { return m_index_events; }
+
+	// Absolute count of output samples pull_samples() has emitted since
+	// power-on.
+	u64 samples_emitted() const { return m_dac_samples_emitted; }
 
 	// Little-endian 16-bit read of CPU program space RAM (diagnostics /
 	// firmware-state peeking, e.g. the 0x000F/0x0011 buffer pointers).
@@ -112,8 +140,30 @@ public:
 	// dt_program_space calls it on every RAM byte access - debug use only,
 	// leave null in production paths.
 	std::function<void(offs_t, bool, u8)> ram_access_hook;
-	// Flatten DAC events up to current emulated time into unsigned 8-bit
-	// PCM at sample_rate_hz (zero-order hold), appending to out.
+	// Resample the queued DAC events up to current emulated time onto a fixed
+	// sample_rate_hz grid of unsigned 8-bit PCM, appending to out.
+	//
+	// This is a real rate conversion, not a formality: the source rate is the
+	// firmware's DAC clock, which jitters +/-5 cycles and which the nF
+	// formant command retunes over 9883..11060 Hz (see DAC_ISR_CYCLES), while
+	// the grid the caller asks for is fixed. Converting a variable source
+	// rate to a fixed output rate is exactly what makes nF audible as
+	// varispeed - drop this and formant becomes a no-op.
+	//
+	// Each output instant is linearly interpolated between the DAC writes
+	// bracketing it, holding instead when the bracket spans more than two DAC
+	// periods (the ISR stops between utterances, and the real DAC holds
+	// across that gap rather than ramping). Picking the nearest preceding
+	// write instead - what this did before - beats the 952.02-cycle grid
+	// against the ~952-cycle writes and slips ~33 times a second at 5F,
+	// dropping one write and repeating its neighbour each time; at 0F, where
+	// the source is 6% slower than the grid, it degrades to plain
+	// sample-duplication.
+	//
+	// Two-point interpolation does not band-limit, so it is only honest for
+	// sample_rate_hz near the DAC clock - which covers every rate the formant
+	// range produces. Asking for a materially lower rate decimates without an
+	// anti-alias filter and will alias; resample outside this function.
 	void pull_samples(std::vector<u8> &out, u32 sample_rate_hz);
 
 	doubletalk_cpu &cpu() { return *m_cpu; }
@@ -147,7 +197,9 @@ private:
 	// index-marker events not yet consumed
 	std::deque<std::pair<s64, u8>> m_index_events;
 	size_t m_dac_total_events = 0;
-	u8 m_dac_level = 0x80;          // last value written (ZOH hold level)
+	u64 m_dac_samples_emitted = 0;  // absolute output samples emitted so far
+	u8 m_dac_level = 0x80;          // last consumed event's value (left bracket)
+	s64 m_dac_prev_cycle = -1;      // ...and its timestamp; -1 = none yet
 	s64 m_audio_emitted_cycles = 0; // emulated time already covered by pull_samples
 };
 

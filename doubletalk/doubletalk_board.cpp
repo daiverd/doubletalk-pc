@@ -171,10 +171,11 @@ u8 doubletalk_board::io_read(u16 port)
 
 void doubletalk_board::pull_samples(std::vector<u8> &out, u32 sample_rate_hz)
 {
-	// Emit ZOH samples covering [m_audio_emitted_cycles, now). Sample n
-	// (counting from power-on) is taken at cycle n * CPU_HZ / rate; use
-	// 128-bit-safe integer math via u64 (cycles < 2^63, rate fits easily).
 	const s64 now = m_machine.now_cycles();
+
+	// Emit samples covering [m_audio_emitted_cycles, now). Sample n (counting
+	// from power-on) is taken at cycle n * CPU_HZ / rate; use 128-bit-safe
+	// integer math via u64 (cycles < 2^63, rate fits easily).
 	s64 next_sample_index = (m_audio_emitted_cycles * s64(sample_rate_hz) + s64(CPU_HZ) - 1) / s64(CPU_HZ);
 
 	for (;;)
@@ -182,12 +183,39 @@ void doubletalk_board::pull_samples(std::vector<u8> &out, u32 sample_rate_hz)
 		s64 sample_cycle = next_sample_index * s64(CPU_HZ) / s64(sample_rate_hz);
 		if (sample_cycle >= now)
 			break;
+
+		// Consume every event at or before this instant; the last one becomes
+		// the left bracket. m_dac_prev_* persist across calls so a bracket
+		// established in one pull is still valid in the next - the caller
+		// pulls every RUN_CHUNK_CYCLES, so most instants find nothing to pop.
 		while (!m_dac_events.empty() && m_dac_events.front().first <= sample_cycle)
 		{
+			m_dac_prev_cycle = m_dac_events.front().first;
 			m_dac_level = m_dac_events.front().second;
 			m_dac_events.pop_front();
 		}
-		out.push_back(m_dac_level);
+
+		u8 value = m_dac_level;
+		if (!m_dac_events.empty() && m_dac_prev_cycle >= 0)
+		{
+			const s64 t0 = m_dac_prev_cycle;
+			const s64 t1 = m_dac_events.front().first;
+			const s64 span = t1 - t0;
+			// Interpolate only across a plausible DAC period. The firmware's
+			// timer ISR stops between utterances, so a bracket can straddle a
+			// silence gap of arbitrary length; ramping across that would drag
+			// the next utterance's first level backwards over the whole gap.
+			// Outside a normal period the DAC really is holding, so hold.
+			if (span > 0 && span <= s64(DAC_ISR_CYCLES) * 2)
+			{
+				const s64 v0 = m_dac_level;
+				const s64 dv = s64(m_dac_events.front().second) - v0;
+				value = u8(v0 + (dv * (sample_cycle - t0) + span / 2) / span);
+			}
+		}
+
+		out.push_back(value);
+		m_dac_samples_emitted++;
 		next_sample_index++;
 	}
 	m_audio_emitted_cycles = now;
