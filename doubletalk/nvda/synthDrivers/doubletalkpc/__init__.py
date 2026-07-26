@@ -18,6 +18,13 @@
 #                        bf7e78d6381c76d291ee069971873347a314ffff.
 
 import ctypes
+# Unmaps the DLL on terminate - ctypes itself never does, so without this each
+# switch to this synth bumps the loader refcount again and nothing ever brings
+# it back down: the image stays mapped for the life of the NVDA process. See
+# _DtalkDLL.close.
+# Private CPython API, but the public spelling (windll.kernel32.FreeLibrary)
+# truncates the HMODULE on 64-bit unless its argtypes are set by hand.
+from _ctypes import FreeLibrary
 import os
 import re
 import threading
@@ -100,17 +107,36 @@ class _DtalkDLL:
 		self.lib.dtalk_read_index_marks.argtypes = [
 			ctypes.c_void_p, ctypes.POINTER(_DtalkIndexMark), ctypes.c_size_t]
 
-		with open(os.path.join(_DIR, "doubletalkpc.bin"), "rb") as f:
-			rom = f.read()
-		self.handle = self.lib.dtalk_create(rom, len(rom))
-		if not self.handle:
-			raise RuntimeError("dtalk_create failed (bad ROM?)")
-		self.sample_rate = self.lib.dtalk_sample_rate(self.handle)
+		# Unload again if the ROM is missing or bad: this is the one failure
+		# every user without a firmware dump hits, and it is retried on every
+		# attempt to select the synth, so a DLL left mapped here is a refcount
+		# that climbs each time.
+		self.handle = None
+		try:
+			with open(os.path.join(_DIR, "doubletalkpc.bin"), "rb") as f:
+				rom = f.read()
+			self.handle = self.lib.dtalk_create(rom, len(rom))
+			if not self.handle:
+				raise RuntimeError("dtalk_create failed (bad ROM?)")
+			self.sample_rate = self.lib.dtalk_sample_rate(self.handle)
+		except Exception:
+			self.close()
+			raise
 
-	def close(self):
+	def close(self, unload=True):
+		# Destroy the emulator instance first: unloading the DLL out from under
+		# a live handle would call dtalk_destroy into unmapped code.
 		if self.handle:
 			self.lib.dtalk_destroy(self.handle)
 			self.handle = None
+		# self.lib is dropped with the module so a second close() cannot free
+		# the same HMODULE twice - that underflows the loader refcount, and if
+		# Windows has since recycled the handle value it unloads someone else's
+		# module. unload=False leaves the image mapped (see terminate): leaking
+		# it is always better than pulling it out from under a running thread.
+		if unload and self.lib:
+			FreeLibrary(self.lib._handle)
+			self.lib = None
 
 
 class SynthDriver(SynthDriver):
@@ -289,8 +315,17 @@ class SynthDriver(SynthDriver):
 		self._queue.put(None)
 		self._thread.join(timeout=5)
 		self._player.close()
+		# Only unload the DLL if the synthesis thread is really gone. _synthLoop
+		# caches lib/handle in locals and _libLock does not help here: close()
+		# runs holding the lock, so a worker parked on it acquires the lock the
+		# moment close() returns and calls straight into the freed image. A
+		# timed-out join leaks a daemon thread; unloading anyway would turn that
+		# leak into an access violation that takes NVDA down with it.
+		unload = not self._thread.is_alive()
+		if not unload:
+			log.warning("Synthesis thread still running; leaving dtalk DLL loaded")
 		with self._libLock:
-			self._dt.close()
+			self._dt.close(unload=unload)
 
 	def _clampSavedSettings(self):
 		# Settings saved by add-on <= 0.1.9 can hold slider values below
