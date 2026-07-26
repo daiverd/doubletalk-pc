@@ -297,25 +297,54 @@ class SynthDriver(SynthDriver):
 		# CARD_MIN_PCT (the sliders then ran 0-100; reverb's old default was 0).
 		# NVDA validates saved values against the driver's CURRENT spec the
 		# moment the base loadSettings reads them, so a stale value raises
-		# VdtValueTooSmallError and the whole synth fails to load. Raise such
-		# values to the setting's minimum in the raw (not yet validated)
-		# profile dicts before the base class reads them. Only the loaded
-		# profile stack is reachable here; an inactive manual profile gets the
-		# same treatment when it is activated, since NVDA reloads settings then.
-		for profile in config.conf.profiles:
-			try:
-				raw = profile["speech"]["doubletalkpc"]
-			except KeyError:
-				continue
-			for s in self.supportedSettings:
-				minVal = getattr(s, "minVal", None)
-				if minVal is None or s.id not in raw:
-					continue
+		# VdtValueTooSmallError and the whole synth fails to load. Pull such
+		# values into range in the raw (not yet validated) profile dicts before
+		# the base class reads them. This is the config-load half of the same
+		# defense _map0to9 applies at speak time. Only the loaded profile stack
+		# is reachable here; an inactive manual profile gets the same treatment
+		# when it is activated, since NVDA reloads settings then.
+		#
+		# The raw dicts are written directly, behind config.conf's back, so
+		# nothing is marked dirty and the stale value stays in the file - that
+		# is deliberate. The repair is idempotent and cheap (a handful of
+		# profiles x ten settings, on load and profile switch only), and not
+		# rewriting the user's config is the smaller footprint of the two.
+		#
+		# Nothing in here may raise: the whole point is that the synth loads.
+		try:
+			for profile in config.conf.profiles:
 				try:
-					if int(raw[s.id]) < minVal:
-						raw[s.id] = minVal
-				except (TypeError, ValueError):
-					pass
+					raw = profile["speech"]["doubletalkpc"]
+				except KeyError:
+					continue
+				for setting in self.supportedSettings:
+					self._clampSavedSetting(raw, setting)
+		except Exception:
+			log.debugWarning("Could not clamp saved settings", exc_info=True)
+
+	@staticmethod
+	def _clampSavedSetting(raw, setting):
+		# maxVal is checked as well as minVal: a range narrowed at the top in
+		# some later version would fail the same way, from the other end. The
+		# non-numeric settings (voice, filter, tone) have neither and are left
+		# alone - their specs are unbounded strings, so they cannot go stale
+		# this way.
+		minVal = getattr(setting, "minVal", None)
+		maxVal = getattr(setting, "maxVal", None)
+		if (minVal is None and maxVal is None) or setting.id not in raw:
+			return
+		# Stored as strings, so compare numerically and write back a string to
+		# keep the raw section homogeneous with everything else on disk.
+		try:
+			value = int(raw[setting.id])
+		except (TypeError, ValueError):
+			log.debugWarning("Ignoring non-numeric saved %s: %r"
+				% (setting.id, raw[setting.id]))
+			return
+		if minVal is not None and value < minVal:
+			raw[setting.id] = str(minVal)
+		elif maxVal is not None and value > maxVal:
+			raw[setting.id] = str(maxVal)
 
 	def loadSettings(self, onlyChanged=False):
 		self._clampSavedSettings()
@@ -478,6 +507,8 @@ class SynthDriver(SynthDriver):
 		# Clamped rather than trusted: a config saved by a build from before
 		# the range changed can still hold values below 10, which would
 		# otherwise produce a negative card value and a malformed command.
+		# _clampSavedSettings repairs those at load time; this is the same
+		# defense at speak time, for any that reach here anyway.
 		return max(0, min(9, pct // 10 - 1))
 
 	@staticmethod
