@@ -472,22 +472,34 @@ class SynthDriver(SynthDriver):
 		# emit its absolute command ONLY when the current setting's card value
 		# differs from THIS voice's preset (an untouched voice emits nothing but
 		# nO; a value the user moved off-preset is emitted absolutely, never
-		# re-flattened to a global default). Rate/Volume are NOT voice-linked
-		# (nS/nV are constant across voices) so they keep the global omit-at-
-		# default rule - now slider 60, the stop that maps to the card's own
-		# default of 5. pitchOverride forces an absolute nP (capital-letter
-		# pitch changes).
+		# re-flattened to a global default). pitchOverride forces an absolute
+		# nP (capital-letter pitch changes).
+		#
+		# Rate/Volume are ALWAYS emitted. They are not voice-linked (nS/nV are
+		# constant across voices), so nO does not reload them - the card simply
+		# keeps whatever nS/nV it was last given. Omitting them at the default
+		# therefore does not mean "the card is at 5", it means "leave the card
+		# wherever it is": moving the volume slider to 50 (nV 4) and back to 60
+		# sent an explicit 4V and then nothing, leaving the card at 4 and the
+		# voice audibly quiet at a nominally default setting. The omit-at-
+		# default rule is only sound for the settings nO reloads.
 		presetPitch, presetArtic, presetFormant, presetTone, presetExpr, \
 			presetReverb = self._voicePresets[self._voice]
-		parts = ["\x01%sO" % self._voice]
-		if self._map0to9(self._rate) != 5:
-			parts.append("\x01%dS" % self._map0to9(self._rate))
+		# Number mode. Left alone, the firmware parses "007" as the value 7 and
+		# says "seven", swallowing the leading zeros - wrong for a screen reader,
+		# where the digits on screen are the content. 14B pronounces leading
+		# zeros while still reading ordinary numbers as numbers ("12" stays
+		# "twelve", "100" stays "one hundred"); the digit-by-digit modes (0B/8B)
+		# would spell every number out and are far too verbose. The mode is
+		# sticky on the card, but it is re-sent here so a card reset cannot
+		# silently drop it.
+		parts = ["\x01%sO" % self._voice, "\x0114B"]
+		parts.append("\x01%dS" % self._map0to9(self._rate))
 		if pitchOverride is not None:
 			parts.append("\x01%dP" % self._mapPitch(pitchOverride))
 		elif self._mapPitch(self._pitch) != presetPitch:
 			parts.append("\x01%dP" % self._mapPitch(self._pitch))
-		if self._map0to9(self._volume) != 5:
-			parts.append("\x01%dV" % self._map0to9(self._volume))
+		parts.append("\x01%dV" % self._map0to9(self._volume))
 		# Voice-quality overrides (after nO, like S/P/V): emitted only when moved
 		# off the current voice's preset so the preset shows through untouched.
 		if int(self._tone) != presetTone:

@@ -2,6 +2,9 @@
 // copyright-holders:David Sexton
 #include "doubletalk_board.h"
 
+#include <algorithm>
+#include <cmath>
+
 // ------------------------------------------------------------------------
 // address spaces (port of doubletalkpc.cpp's cpu_map/cpu_io)
 // ------------------------------------------------------------------------
@@ -105,6 +108,7 @@ void doubletalk_board::reset()
 	m_dac_events.clear();
 	m_index_events.clear();
 	m_dac_level = 0x80;
+	m_dac_cursor = 0;
 }
 
 void doubletalk_board::host_write(u8 data)
@@ -169,54 +173,114 @@ u8 doubletalk_board::io_read(u16 port)
 	return 0;
 }
 
-void doubletalk_board::pull_samples(std::vector<u8> &out, u32 sample_rate_hz)
+namespace {
+
+// Lanczos kernel: sinc(x) * sinc(x/a) for |x| < a, 0 outside. `cutoff` scales
+// the kernel in frequency (1.0 = source Nyquist); values below 1 narrow the
+// passband so a source running faster than the output grid is band-limited
+// before it is decimated.
+inline double lanczos(double x, double cutoff, int a)
+{
+	if (x <= -a || x >= a)
+		return 0.0;
+	if (x == 0.0)
+		return cutoff;
+	constexpr double PI = 3.14159265358979323846;
+	const double px = PI * x;
+	// sinc(cutoff*x) * cutoff, times the Lanczos window sinc(x/a)
+	return cutoff * (std::sin(px * cutoff) / (px * cutoff)) * (std::sin(px / a) / (px / a));
+}
+
+} // anonymous namespace
+
+void doubletalk_board::pull_samples(std::vector<u8> &out, u32 sample_rate_hz, bool drain)
 {
 	const s64 now = m_machine.now_cycles();
 
-	// Emit samples covering [m_audio_emitted_cycles, now). Sample n (counting
-	// from power-on) is taken at cycle n * CPU_HZ / rate; use 128-bit-safe
-	// integer math via u64 (cycles < 2^63, rate fits easily).
-	s64 next_sample_index = (m_audio_emitted_cycles * s64(sample_rate_hz) + s64(CPU_HZ) - 1) / s64(CPU_HZ);
+	// Hold back a lookahead margin so the kernel's right-hand taps are real
+	// samples rather than an edge-extended guess. drain=true gives that up to
+	// flush the tail - correct at end of utterance, where the ISR has stopped
+	// and the DAC is genuinely holding its last level anyway.
+	const s64 margin = drain ? 0 : s64(RESAMP_HALF) * s64(DAC_ISR_CYCLES_MAX);
+	const s64 horizon = now - margin;
 
 	for (;;)
 	{
-		s64 sample_cycle = next_sample_index * s64(CPU_HZ) / s64(sample_rate_hz);
-		if (sample_cycle >= now)
+		// Sample n (counting from power-on) is taken at cycle n*CPU_HZ/rate.
+		const s64 sample_cycle = m_next_sample_index * s64(CPU_HZ) / s64(sample_rate_hz);
+		if (sample_cycle >= horizon)
 			break;
 
-		// Consume every event at or before this instant; the last one becomes
-		// the left bracket. m_dac_prev_* persist across calls so a bracket
-		// established in one pull is still valid in the next - the caller
-		// pulls every RUN_CHUNK_CYCLES, so most instants find nothing to pop.
-		while (!m_dac_events.empty() && m_dac_events.front().first <= sample_cycle)
-		{
-			m_dac_prev_cycle = m_dac_events.front().first;
-			m_dac_level = m_dac_events.front().second;
-			m_dac_events.pop_front();
-		}
+		// Advance the cursor to the last event at or before this instant.
+		while (m_dac_cursor + 1 < m_dac_events.size()
+			&& m_dac_events[m_dac_cursor + 1].first <= sample_cycle)
+			m_dac_cursor++;
 
-		u8 value = m_dac_level;
-		if (!m_dac_events.empty() && m_dac_prev_cycle >= 0)
+		u8 value;
+		if (m_dac_events.empty() || m_dac_events[m_dac_cursor].first > sample_cycle)
 		{
-			const s64 t0 = m_dac_prev_cycle;
-			const s64 t1 = m_dac_events.front().first;
-			const s64 span = t1 - t0;
-			// Interpolate only across a plausible DAC period. The firmware's
-			// timer ISR stops between utterances, so a bracket can straddle a
-			// silence gap of arbitrary length; ramping across that would drag
-			// the next utterance's first level backwards over the whole gap.
-			// Outside a normal period the DAC really is holding, so hold.
-			if (span > 0 && span <= s64(DAC_ISR_CYCLES) * 2)
+			// Before the first event ever captured: the DAC is still sitting
+			// at its power-on level.
+			value = m_dac_events.empty() ? m_dac_level : m_dac_events.front().second;
+		}
+		else
+		{
+			const size_t j = m_dac_cursor;
+			const s64 t0 = m_dac_events[j].first;
+			const bool have_right = (j + 1 < m_dac_events.size());
+			const s64 span = have_right ? (m_dac_events[j + 1].first - t0) : 0;
+
+			// A bracket wider than two DAC periods is not a sample interval,
+			// it is the silence between utterances (the ISR stops). Band-
+			// limited reconstruction across that would ring; the real DAC just
+			// holds, so hold. Same when there is no right-hand event yet.
+			if (span <= 0 || span > s64(DAC_ISR_CYCLES) * 2)
 			{
-				const s64 v0 = m_dac_level;
-				const s64 dv = s64(m_dac_events.front().second) - v0;
-				value = u8(v0 + (dv * (sample_cycle - t0) + span / 2) / span);
+				value = m_dac_events[j].second;
+			}
+			else
+			{
+				// Fractional position on the source-sample-index axis.
+				const double frac = double(sample_cycle - t0) / double(span);
+				// Local source rate is CPU_HZ/span; band-limit to whichever of
+				// source and output Nyquist is lower.
+				const double out_period = double(CPU_HZ) / double(sample_rate_hz);
+				const double cutoff = std::min(1.0, double(span) / out_period);
+
+				double acc = 0.0, wsum = 0.0;
+				for (int k = -RESAMP_HALF + 1; k <= RESAMP_HALF; k++)
+				{
+					const double w = lanczos(frac - k, cutoff, RESAMP_HALF);
+					if (w == 0.0)
+						continue;
+					// Clamp taps past either end of the queue to the edge
+					// sample (the DAC held that level).
+					const s64 idx = s64(j) + k;
+					const size_t ci = size_t(std::clamp<s64>(idx, 0, s64(m_dac_events.size()) - 1));
+					acc += w * double(m_dac_events[ci].second);
+					wsum += w;
+				}
+				// Normalize: the tap weights of a windowed sinc do not sum to
+				// exactly 1 at an arbitrary fractional offset, and the residual
+				// would show up as broadband gain ripple.
+				const double v = (wsum != 0.0) ? (acc / wsum) : double(m_dac_events[j].second);
+				value = u8(std::clamp(int(std::lround(v)), 0, 255));
 			}
 		}
 
 		out.push_back(value);
 		m_dac_samples_emitted++;
-		next_sample_index++;
+		m_next_sample_index++;
 	}
-	m_audio_emitted_cycles = now;
+
+	// Retire events that have fallen off the left edge of the kernel support.
+	// Keep RESAMP_HALF behind the cursor so the next call can still reach them.
+	const size_t keep_behind = size_t(RESAMP_HALF);
+	if (m_dac_cursor > keep_behind)
+	{
+		const size_t drop = m_dac_cursor - keep_behind;
+		m_dac_level = m_dac_events[drop - 1].second;
+		m_dac_events.erase(m_dac_events.begin(), m_dac_events.begin() + drop);
+		m_dac_cursor -= drop;
+	}
 }

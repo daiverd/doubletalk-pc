@@ -44,26 +44,41 @@ constexpr double DC_BLOCK_HZ = 20.0;    // one-pole high-pass corner
 // stage ("Low Cost 3 kHz Low-Pass Filter"), which read as independent
 // confirmation.
 //
-// That agreement did not survive pull_samples() becoming an interpolating
-// resampler. Interpolation already removes about half the staircase's HF
-// energy (raw energy above 3kHz: 0.0287 zero-order-hold -> 0.0142 interpolated),
-// so at 3000 the reconstruction filtering now happens twice and the voice comes
-// out audibly darker than the card. Re-measured against the same MAME reference
-// (mame doubletalk branch, scripts/doubletalk_regression_declaration.lua, DAC on
-// the capture's RIGHT channel - LEFT is the PC speaker), spectral tilt of the
-// 2-5kHz band against 0.3-2kHz over 215 speech frames:
+// That agreement did not survive pull_samples() becoming a resampler, and the
+// reason has changed twice.
+//
+// When pull_samples() interpolated linearly, the interpolation itself removed
+// about half the staircase's HF energy (raw energy above 3kHz: 0.0287
+// zero-order-hold -> 0.0142 interpolated), so at 3000 the reconstruction
+// filtering happened twice and the voice came out audibly darker than the card.
+// 3800 was chosen to undo exactly that loss. Measured against the MAME
+// reference (mame doubletalk branch, scripts/doubletalk_regression_declaration.lua,
+// DAC on the capture's RIGHT channel - LEFT is the PC speaker), spectral tilt
+// of the 2-5kHz band against 0.3-2kHz over 215 speech frames:
 //
 //     MAME reference          -7.57 dB   (the target)
-//     zero-order-hold @ 3000  -8.87 dB   (what this used to ship)
+//     zero-order-hold @ 3000  -8.87 dB
 //     interpolated @ 3000    -10.32 dB   (too dark - double-filtered)
-//     interpolated @ 3800     -8.91 dB   (within 0.04 dB of the old voice)
-//     interpolated @ 4800     -8.41 dB   (closest to MAME, brightest)
+//     interpolated @ 3800     -8.91 dB   (what this shipped)
+//     interpolated @ 4800     -8.41 dB   (brightest reachable, still short)
 //
-// 3800 is the value that keeps the shipped voice exactly where it was, so the
-// resampler fix lands without a tonal change. Note no corner reaches MAME's
-// -7.57: the model is ~1.3 dB darker than the reference either way, and the
-// datasheet's 3 kHz is no longer the matching value, so the two references
-// genuinely disagree now.
+// pull_samples() is now band-limited (windowed sinc), which does not throw away
+// the highs in the first place: on an identical phrase the raw pre-filter energy
+// above 3kHz goes 0.0216 -> 0.0468, a 2.17x recovery that mirrors the 2.02x
+// linear interpolation was destroying. So the corner no longer has a resampler
+// deficit to compensate, and the same 3800 now lands on the MAME reference
+// rather than 1.3dB below it - re-measured tilt at 3800 sits within about
+// 0.1dB of the reference, where the old resampler could not reach it at any
+// corner. 3800 therefore stays, but it is now the value that MATCHES the
+// reference instead of the value that cancelled an artifact.
+//
+// (That last comparison is cross-calibrated: the re-measurement used a
+// different phrase from the original 215-frame capture, and the two framings
+// differ by a constant ~1.5dB offset - consistent to +/-0.07dB across three
+// independent corners. Re-running the MAME capture would confirm it directly.)
+//
+// The datasheet's 3 kHz remains available (and is the authentic analog corner);
+// it is simply darker than the MAME reference this model is tuned against.
 constexpr double LPF_HZ = 3800.0;
 constexpr double HEADROOM_GAIN = 0.5;   // MAME's DAC output route
                                         // (add_route(ALL_OUTPUTS,"mono",0.5))
@@ -277,7 +292,7 @@ struct dtalk
 		// back into delivered-stream positions - otherwise every mark after a
 		// cancel would fire late by the running total of discarded audio.
 		std::vector<u8> scrap;
-		board.pull_samples(scrap, SAMPLE_RATE);
+		board.pull_samples(scrap, SAMPLE_RATE, true); // drain: leave nothing pending
 		samples_dropped += scrap.size();
 		samples_dropped += carry.size() - carry_off; // pulled-but-undelivered remainder
 		board.index_events().clear();
@@ -325,7 +340,7 @@ struct dtalk
 		// swallow power-on audio (the genuine hardware DC click)
 		board.run_cycles(doubletalk_board::CPU_HZ / 10);
 		std::vector<u8> scrap;
-		board.pull_samples(scrap, SAMPLE_RATE);
+		board.pull_samples(scrap, SAMPLE_RATE, true); // drain: leave nothing pending
 		board.index_events().clear();
 		samples_base = u64(board.now_cycles()) * SAMPLE_RATE / doubletalk_board::CPU_HZ;
 		return true;

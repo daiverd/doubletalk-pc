@@ -223,3 +223,96 @@ more usefully, it carried three defects worth recording as things to avoid:
 
 The current implementation addresses all three - persistent bracket state, no
 early return, and the two-period span limit.
+
+---
+
+# Round two: linear interpolation was not band-limited
+
+Two later user reports turned out to be the same defect in the interpolating
+resampler this document describes.
+
+**Report A.** Reading the same word repeatedly in NVDA, with a pause between
+each, the level of the `/s/` audibly shifted from one repetition to the next.
+Not reproducible in MAME.
+
+**Report B.** Even with the filter set to 5 kHz, MAME sounded brighter - "more
+highs" - than the emulator.
+
+## Both are the sinc^2 response of two-point interpolation
+
+Linear interpolation reconstructs with a triangular kernel, whose frequency
+response is `sinc^2`. At 5 kHz against a 10504 Hz source that is **-7.0 dB**,
+where a zero-order hold (response `sinc`) costs only **-3.5 dB**. That is
+report B directly: the loss is in the resampler, so no low-pass corner can
+recover it - raising the corner to 5000 does nothing about content the
+resampler already discarded.
+
+Report A is the same loss made time-varying. How much a `sinc^2` kernel
+attenuates depends on *where in the source period the output instant lands* -
+full gain when it lands on a DAC write, maximum loss when it lands halfway
+between. The output grid is 10504 Hz (integer) while the true DAC rate is
+`CPU_HZ/952` = 10504.20 Hz, so that phase slides continuously, and consecutive
+utterances begin at unrelated phases.
+
+Measured, 40 repetitions of "SPACE" in one session:
+
+| | RMS spread across repetitions |
+|---|---|
+| linear interpolation | **8.96%** (0.74 dB), oscillating 772 -> 841 -> 772 |
+| band-limited kernel | **0.28%** (0.024 dB) |
+
+The oscillation is bounded and cyclic - it returns to where it started, which
+is what identifies it as a phase beat rather than an accumulating leak.
+Utterances rendered in *separate* sessions were always bit-identical, because
+each session starts at phase zero; only within a session does the phase walk.
+
+## The fix
+
+`pull_samples()` now interpolates with a windowed sinc (Lanczos, 8 taps each
+side) on the **source sample index** axis: DAC write *k* is sample *k* of a
+sequence clocked at the firmware's ISR rate, each output instant is located as
+a fractional index between its bracketing writes, and the kernel is evaluated
+there. When the source runs faster than the grid (7F/9F) the kernel cutoff
+scales to the output Nyquist so decimation stays anti-aliased. Weights are
+normalized per sample, since a windowed sinc's taps do not sum to exactly 1 at
+an arbitrary fractional offset and the residual would be broadband gain ripple.
+
+Gain is now flat to the passband edge regardless of phase, which fixes both
+reports at once. On an identical phrase, raw pre-filter energy above 3 kHz:
+
+| | energy > 3 kHz |
+|---|---|
+| linear interpolation | 0.0216 |
+| band-limited kernel | 0.0468 |
+
+A **2.17x** recovery - mirroring the 2.02x that interpolation was destroying
+(0.0287 -> 0.0142 in the original measurement above).
+
+Two implementation details the design forces:
+
+* **Lookahead.** The kernel reaches 8 samples right of the output instant, so
+  output lags `now` by 8 source periods and events are retired only once they
+  fall off the *left* edge of the support - `m_dac_events` is no longer drained
+  down to the current instant. `pull_samples(..., drain=true)` flushes the tail
+  (clamping missing right taps to the last DAC level, which is what the DAC
+  holds anyway); boot and cancel pass it so nothing is left pending to surface
+  inside a later utterance. End of utterance needs no special case: the 150 ms
+  idle settle advances `now` well past the 0.82 ms margin.
+* **The gap guard survives.** A bracket wider than two DAC periods is still the
+  silence between utterances, not a sample interval, and is still held rather
+  than reconstructed - band-limited reconstruction across it would ring.
+
+## Consequence for `LPF_HZ`
+
+3800 stays, but its justification inverts. It was chosen to *cancel* the
+interpolator's HF loss; with that loss gone it is simply the corner that best
+matches the MAME reference - and it now reaches it, where previously "no corner
+reaches MAME's -7.57; the model is ~1.3 dB darker either way". The datasheet's
+authentic 3000 remains available and remains darker than the reference.
+
+## Verification
+
+* Formant varispeed preserved: 0F 11601 samples > 5F 11076 > 9F 10656.
+* `stoptest`: index marks drift **0 samples** after 30 cancels.
+* `booststress`: STRESS PASS, idle after every phrase.
+* 21.7x realtime - the 16-tap kernel is negligible beside the 80C188EB core.

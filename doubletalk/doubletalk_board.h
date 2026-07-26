@@ -9,7 +9,8 @@
 // sees: write text bytes to the TTS port (RDY-gated), read the TTS status
 // byte. Audio comes out as timestamped 8-bit PCM writes from the firmware's
 // timer ISR (CPU I/O port 0x00), which pull_samples() flattens into a
-// constant-rate unsigned 8-bit stream (zero-order hold, like the real DAC).
+// constant-rate unsigned 8-bit stream (band-limited resampling - the DAC clock
+// is not the output grid and the firmware retunes it; see pull_samples).
 
 #ifndef DOUBLETALK_BOARD_H
 #define DOUBLETALK_BOARD_H
@@ -74,6 +75,14 @@ public:
 	// rate is NOT fixed, and pull_samples() must genuinely resample.
 	static constexpr u32 DAC_ISR_CYCLES = 952;
 	static constexpr u32 DAC_HZ = CPU_HZ / DAC_ISR_CYCLES; // 10504
+	// Longest DAC period the firmware can be driving (0F, plus jitter margin).
+	// Sizes the lookahead pull_samples() holds back so its kernel always has
+	// real samples to its right rather than an edge-extended guess.
+	static constexpr u32 DAC_ISR_CYCLES_MAX = 1024;
+	// Half-width of the resampling kernel, in source samples (see
+	// pull_samples). 8 -> 16 taps, whose stopband is far below the 8-bit DAC's
+	// own noise floor; the cost is 16 multiply-adds per output sample.
+	static constexpr int RESAMP_HALF = 8;
 	static constexpr u32 RAM_SIZE = 0x20000;      // 128KB (generous placeholder)
 	static constexpr u32 ROM_BASE = 0x80000;
 	static constexpr u32 ROM_SIZE = 0x80000;
@@ -150,21 +159,41 @@ public:
 	// rate to a fixed output rate is exactly what makes nF audible as
 	// varispeed - drop this and formant becomes a no-op.
 	//
-	// Each output instant is linearly interpolated between the DAC writes
-	// bracketing it, holding instead when the bracket spans more than two DAC
-	// periods (the ISR stops between utterances, and the real DAC holds
-	// across that gap rather than ramping). Picking the nearest preceding
-	// write instead - what this did before - beats the 952.02-cycle grid
-	// against the ~952-cycle writes and slips ~33 times a second at 5F,
-	// dropping one write and repeating its neighbour each time; at 0F, where
-	// the source is 6% slower than the grid, it degrades to plain
-	// sample-duplication.
+	// The conversion is a windowed-sinc (Lanczos, RESAMP_HALF taps each side)
+	// interpolation on the SOURCE SAMPLE INDEX axis: DAC write k is sample k of
+	// a sequence clocked at the firmware's ISR rate, each output instant is
+	// located as a fractional index between the writes bracketing it, and the
+	// kernel is evaluated at that fractional offset. When the source is faster
+	// than the grid (7F/9F) the kernel's cutoff is scaled down to the output
+	// Nyquist so decimation stays anti-aliased.
 	//
-	// Two-point interpolation does not band-limit, so it is only honest for
-	// sample_rate_hz near the DAC clock - which covers every rate the formant
-	// range produces. Asking for a materially lower rate decimates without an
-	// anti-alias filter and will alias; resample outside this function.
-	void pull_samples(std::vector<u8> &out, u32 sample_rate_hz);
+	// Two cheaper conversions were tried and both are audibly wrong:
+	//
+	//   Nearest-preceding-write beats the 952.02-cycle grid against the
+	//   ~952-cycle writes and slips ~33 times a second at 5F, dropping one
+	//   write and repeating its neighbour each time.
+	//
+	//   Two-point linear interpolation fixes the slipping but is not
+	//   band-limited: its response is sinc^2, which at 5kHz costs 7.0dB
+	//   against a hold's 3.5dB, and - because that loss depends on where in
+	//   the source period the output instant happens to land - it MODULATES
+	//   with the grid/DAC phase. Since consecutive utterances start at
+	//   unrelated phases, the same word rendered twice came out up to 0.74dB
+	//   apart, heard as the level of an /s/ wobbling between repetitions.
+	//
+	// A band-limited kernel has neither problem: gain is flat to the passband
+	// edge regardless of phase, so repeated utterances match and the highs
+	// survive. This is genuine rate conversion, not a formality - the source
+	// rate jitters +/-5 cycles and the nF formant command retunes it over
+	// 9883..11060Hz (see DAC_ISR_CYCLES), which is exactly what makes nF
+	// audible as varispeed.
+	//
+	// Output lags `now` by RESAMP_HALF source periods so the kernel always has
+	// real samples to its right; pass drain=true to flush that tail (clamping
+	// the missing right-hand taps to the last DAC level, which is what the
+	// real DAC holds anyway). Callers that discard the result - boot, cancel -
+	// want drain=true so nothing is left pending to surface later.
+	void pull_samples(std::vector<u8> &out, u32 sample_rate_hz, bool drain = false);
 
 	doubletalk_cpu &cpu() { return *m_cpu; }
 
@@ -198,9 +227,13 @@ private:
 	std::deque<std::pair<s64, u8>> m_index_events;
 	size_t m_dac_total_events = 0;
 	u64 m_dac_samples_emitted = 0;  // absolute output samples emitted so far
-	u8 m_dac_level = 0x80;          // last consumed event's value (left bracket)
-	s64 m_dac_prev_cycle = -1;      // ...and its timestamp; -1 = none yet
-	s64 m_audio_emitted_cycles = 0; // emulated time already covered by pull_samples
+	u8 m_dac_level = 0x80;          // level held before the first event arrives
+	// Resampler cursor. m_dac_events is NOT drained down to the current output
+	// instant: the kernel reaches RESAMP_HALF samples either side, so events
+	// stay queued until they fall off the left edge of its support.
+	// m_dac_cursor indexes the bracket-left event within m_dac_events.
+	size_t m_dac_cursor = 0;
+	s64 m_next_sample_index = 0;    // absolute index of the next grid sample
 };
 
 #endif // DOUBLETALK_BOARD_H

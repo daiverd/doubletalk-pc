@@ -112,12 +112,12 @@ DTALK_API size_t dtalk_synth16(dtalk *dt, int16_t *out, size_t max_samples);
  * headroom gain, the Direct-Form-I biquad topology) is unchanged; only the
  * low-pass corner moves.
  *
- * The default is 3800 Hz, the corner that reproduces this synth's long-standing
- * voice now that the sample-rate conversion feeding the output stage
- * interpolates rather than holding (see LPF_HZ in dtalk.cpp for the
- * measurements). 3000 Hz remains available and is the RC8650/RC8660 datasheets'
- * own recommended "3 kHz Low-Pass Filter" output stage; against an
- * interpolated stream it now sounds distinctly darker than the card. Passing 0
+ * The default is 3800 Hz, the corner that best matches the MAME reference this
+ * output stage is modeled on, now that the sample-rate conversion feeding it is
+ * band-limited and no longer eats the highs itself (see LPF_HZ in dtalk.cpp for
+ * the measurements). 3000 Hz remains available and is the RC8650/RC8660
+ * datasheets' own recommended "3 kHz Low-Pass Filter" output stage; it is the
+ * authentic analog corner but sounds darker than the reference. Passing 0
  * restores the default.
  *
  * Lower corners muffle; higher ones brighten by letting more of the DAC's
