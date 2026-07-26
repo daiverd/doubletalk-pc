@@ -292,7 +292,33 @@ class SynthDriver(SynthDriver):
 		with self._libLock:
 			self._dt.close()
 
+	def _clampSavedSettings(self):
+		# Settings saved by add-on <= 0.1.9 can hold slider values below
+		# CARD_MIN_PCT (the sliders then ran 0-100; reverb's old default was 0).
+		# NVDA validates saved values against the driver's CURRENT spec the
+		# moment the base loadSettings reads them, so a stale value raises
+		# VdtValueTooSmallError and the whole synth fails to load. Raise such
+		# values to the setting's minimum in the raw (not yet validated)
+		# profile dicts before the base class reads them. Only the loaded
+		# profile stack is reachable here; an inactive manual profile gets the
+		# same treatment when it is activated, since NVDA reloads settings then.
+		for profile in config.conf.profiles:
+			try:
+				raw = profile["speech"]["doubletalkpc"]
+			except KeyError:
+				continue
+			for s in self.supportedSettings:
+				minVal = getattr(s, "minVal", None)
+				if minVal is None or s.id not in raw:
+					continue
+				try:
+					if int(raw[s.id]) < minVal:
+						raw[s.id] = minVal
+				except (TypeError, ValueError):
+					pass
+
 	def loadSettings(self, onlyChanged=False):
+		self._clampSavedSettings()
 		# NVDA restores saved settings by first changing the voice and THEN
 		# restoring each other setting (SynthDriver.loadSettings applies "voice"
 		# before the rest of supportedSettings). If _set_voice snapped the six
