@@ -1,0 +1,86 @@
+; example.dict --- a worked example of the rcdict format.
+;
+; COLUMNS ARE SEPARATED BY TABS. Four of them:
+;
+;       type <TAB> flags <TAB> pattern <TAB> output
+;
+; The flags column may be empty, and may be left out entirely for a
+; three-column line. A tab cannot appear inside any field, so the pattern may
+; contain spaces, '=' and ';' with nothing to escape.
+;
+; (Where tabs cannot survive -- a config dialog, a web form, a paste that
+; expanded them -- the same rule can be written without any tabs as
+; "type[:flags] pattern = output". Both spellings load.)
+;
+; Comment lines start with ';' and must be lines of their own. That is the
+; chip datasheet's own convention for its exception dictionaries.
+
+#!rcdict 1
+#!case insensitive
+#!lang en
+
+; ---------------------------------------------------------------------------
+; Respellings. The simplest thing that works, and often the best: the output is
+; ordinary text, so it goes back through the chip's letter-to-sound stage and
+; keeps all of its prosody. The datasheet suggests exactly this as the first
+; technique to reach for.
+; ---------------------------------------------------------------------------
+word		Sean	Shawn
+word		chauffeur	show fur
+word		baseball	base ball
+word		Adam	atom
+
+; ---------------------------------------------------------------------------
+; Phonemes, for when respelling cannot get there. Symbols are RC8650 datasheet
+; Table 5, validated at load, so a typo is reported with its line number rather
+; than sent to the chip.
+;
+; Several Table 5 symbols share one internal code -- AH and AX, I and IY,
+; EW/U/UW, O and OW (see dict-lab/phoneme-codes.txt) -- so choosing between
+; those is choosing nothing.
+; ---------------------------------------------------------------------------
+word		arthritis	[AA R TH R AY DX IX S]
+word		Ubuntu	[UW B UH N T UW]
+word		Alex	[AE L IX K S]
+
+; ---------------------------------------------------------------------------
+; Case. 'c' matches exactly what is written, so a 'c' rule for "US" already
+; leaves "us" and "Us" alone. 'C' asks a different question: it ignores the
+; pattern's own case and fires only where the TEXT is all capitals. Reach for
+; it when the pattern's case is not something you want to have to get right.
+; ---------------------------------------------------------------------------
+word	C	US	[Y UW EH S]
+word	c	iOS	[AY OW EH S]
+
+; ---------------------------------------------------------------------------
+; Substrings, for what is not a whole word. Rules are tried in load order and
+; the first match wins, so put the specific ones first. This is the trap the
+; datasheet warns about for its own dictionaries, where (RAT) placed before
+; (RATING) means (RATING) is never reached.
+;
+; Commented out rather than deleted: whether an abbreviation is better expanded
+; or left alone is a matter of taste, and the format is the point here.
+; ---------------------------------------------------------------------------
+; text		Mbps	megabits per second
+; text		Kbps	kilobits per second
+
+; ---------------------------------------------------------------------------
+; Commands can be mixed in: {2S} drops the chip to speed 2 for an acronym that
+; is hard to catch at speed. Note what the second command is NOT: {5S} sets the
+; speed to 5, it does not restore whatever the speed was before. A command
+; leaves the chip changed for the rest of the utterance, so a rule that changes
+; a setting has to name the value it wants back, and only fits where that value
+; is known. An empty output makes the match silent.
+; ---------------------------------------------------------------------------
+; word		ASAP	{2S}[EY EH S EY P IY]{5S}
+; word		approx	approximately
+
+; ---------------------------------------------------------------------------
+; Regular expressions, with \1-\9 for the captured groups. Note that regex
+; patterns always match CASE-SENSITIVELY, whatever #!case says: the engine has
+; no case-insensitive mode, and lowercasing a pattern would turn \W into \w.
+; Write a class such as [Vv] instead.
+; ---------------------------------------------------------------------------
+
+; regex		\bv([0-9]+)\.([0-9]+)\b	version \1 point \2
+; regex		([0-9]+)%	\1 percent

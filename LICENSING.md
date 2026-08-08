@@ -29,11 +29,29 @@ the copyright.
 | `doubletalk/nvda/**` | NVDA add-on driver, manifest, build script (our code) | BSD-3-Clause | David Sexton |
 | `doubletalk/mame/i86.*`, `i186.*`, `i86inline.h` | Vendored MAME 8086/80186 + 80C188EB CPU core | BSD-3-Clause | Carl; **Christopher Toth** (I80C188EB / EB Peripheral Control Block additions) |
 | `doubletalk/mame/endianness.h` | Vendored MAME utility | BSD-3-Clause | Aaron Giles, Vas Crabb |
+| `doubletalk/rcdict/rcdict*.{c,h}`, `example.dict` | Pronunciation-dictionary layer, shared verbatim with its upstream project | BSD-3-Clause | see the file headers |
+| `doubletalk/rcdict/remimu.h` | Vendored single-header regex engine | **CC0 / public domain** | wareya |
 | `docs/**`, `notes/**`, `*.md` | Our documentation and research notes | BSD-3-Clause | David Sexton (except `notes/investigation-audio-path.md`: **Christopher Toth**) |
 | `doubletalkpc.bin` (the ROM) | DoubleTalk PC firmware | **Proprietary — not included** | RC Systems, Inc. |
 
 Every source file carries a matching `license:` / `copyright-holders:` header
-(MAME-style `// license:` for C/C++, `# license:` for scripts/manifests).
+(MAME-style `// license:` for C/C++, `# license:` for scripts/manifests); the
+`doubletalk/rcdict/**` files use SPDX identifiers instead, because they are
+shared byte-for-byte with another repository and must read the same in both.
+
+### About `doubletalk/rcdict/**`
+
+These files are mirrored from their upstream project and must not be edited
+here — a sync check there fails if the two copies differ. They are BSD-3-Clause
+and depend on nothing beyond libc, which is exactly what lets them serve both
+this project and a GPL-3 one. **The sharing only works in that direction:**
+BSD-3 code can be linked into a GPL-3 program, so nothing under `rcdict/` may
+ever acquire a GPL header, or a dependency on anything outside this tree.
+
+`remimu.h` is a third-party regex engine released under CC0, i.e. placed in the
+public domain. CC0 imposes no conditions, so it adds nothing to what a
+redistributor of this project has to do; it is listed for completeness and
+because attribution is polite rather than required.
 
 ## Original project code — BSD-3-Clause
 
