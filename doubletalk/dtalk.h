@@ -78,8 +78,66 @@ DTALK_API uint8_t dtalk_lpc_status(dtalk *dt);
  * card RDY-gated as it accepts them while dtalk_synth() runs. */
 DTALK_API void dtalk_queue(dtalk *dt, const void *bytes, size_t len);
 
-/* Convenience: queue text followed by CR. */
+/* Convenience: queue text followed by CR. The pronunciation dictionary, if
+ * one is set, is applied first. */
 DTALK_API void dtalk_say(dtalk *dt, const char *text);
+
+/* --- pronunciation dictionary -------------------------------------------- */
+
+/* Substitute pronunciations into text on its way to the card: respellings,
+ * phonemes through the card's own phoneme mode (Ctrl-A D), or embedded
+ * commands. The rules, the file format and the loaders belong to rcdict, which
+ * is mirrored verbatim from upstream -- include rcdict/rcdict.h to build one.
+ * All of it is optional and off until asked for.
+ *
+ * The dictionary is BORROWED: it must outlive the instance, or be replaced
+ * with NULL before it is freed. inline_phonemes switches on the "[[K AE T]]"
+ * escape in ordinary text, which is off by default because "[[" is wiki link
+ * syntax and a user reading a wiki must not lose text to it. */
+struct rcdict;
+DTALK_API void dtalk_set_dictionary(dtalk *dt, const struct rcdict *d,
+                                    int inline_phonemes);
+
+/* Run the dictionary over text WITHOUT queueing it, returning the number of
+ * bytes the result needs (not counting a terminating NUL); a value >= outcap
+ * means it was truncated and the call should be repeated bigger.
+ *
+ * For callers that split long text into utterances themselves: one word can
+ * expand into forty characters of phonemes plus the mode switches, so
+ * splitting first and expanding after can push a piece past what the card will
+ * take. Expand, then split. */
+DTALK_API size_t dtalk_expand(dtalk *dt, const char *in, size_t inlen,
+                              char *out, size_t outcap);
+
+/* Building a dictionary, for callers that cannot reach rcdict's own symbols.
+ *
+ * A C caller that links libdtalk.a should just include rcdict/rcdict.h and use
+ * rcdict_new/rcdict_add_file directly -- these add nothing. They exist for the
+ * DLL: dtalk.h marks its entry points __declspec(dllexport), which turns off
+ * mingw's export-everything default, so rcdict's own symbols are not in the
+ * DLL's export table and a ctypes caller cannot see them. Re-exporting the
+ * four calls a host actually needs is a great deal less crude than exporting
+ * every symbol in the image, and it keeps the export marker out of rcdict --
+ * which has to stay free of anything Windows- or project-specific if it is to
+ * go on being shared verbatim with its other host.
+ *
+ * dtalk_dict_new also settles the profile (rcdict_doubletalk_pc) here rather
+ * than making the caller name it. That is the one piece of the construction a
+ * host has no business choosing.
+ *
+ * The result is BORROWED by dtalk_set_dictionary: detach it with NULL before
+ * dtalk_dict_free. */
+DTALK_API struct rcdict *dtalk_dict_new(void);
+DTALK_API void dtalk_dict_free(struct rcdict *d);
+
+/* Append one file's rules, returning how many were added (0 on any failure:
+ * unreadable file, or a file whose every line was rejected). Rules are
+ * first-match-wins in load order across all files, so a later file can only
+ * add -- to override an earlier one it has to be loaded first. */
+DTALK_API int dtalk_dict_add_file(struct rcdict *d, const char *path);
+
+/* Total rules held, across every file added. */
+DTALK_API size_t dtalk_dict_rule_count(const struct rcdict *d);
 
 /* Immediate stop (Ctrl-X / DTLK_CLEAR, written un-gated per the manual):
  * drops the host-side queue, stops speech, flushes the card's buffer, and
