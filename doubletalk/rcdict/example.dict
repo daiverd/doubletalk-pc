@@ -84,3 +84,34 @@ word	c	iOS	[AY OW EH S]
 
 ; regex		\bv([0-9]+)\.([0-9]+)\b	version \1 point \2
 ; regex		([0-9]+)%	\1 percent
+
+; ---------------------------------------------------------------------------
+; The chip's own exception syntax, L(F)R: "the text fragment F, occurring with
+; left context L and right context R, gets this pronunciation". Only what is
+; inside the parentheses is consumed -- the contexts are looked at and left for
+; the next rule to see. Both of these are the datasheet's own examples.
+;
+; Fifteen context tokens: # a vowel, + a front vowel, ^ a consonant, * one or
+; more consonants, : zero or more, ? a voiced consonant, @ one of d j l n r s t
+; z ch sh th, ! one of b c d f g p t, % a suffix, & a sibilant, $ a
+; nonalphabetic character (or the edge of the text), ~ one or more spaces or
+; controls, \ a digit, | one or more digits, ` anything.
+; ---------------------------------------------------------------------------
+
+; o between c and n, the o-sound in cot, as in icon and economy
+; rule		C(O)N	[AA]
+; an h after an initial r is silent, as in rhyme: no output at all
+; rule		$R(H)
+
+; ---------------------------------------------------------------------------
+; Those classes are English, which is the one part of the rule language that
+; does not travel. Declare the alphabet before the rules that need it and every
+; class follows: $ is "not in # and not in ^", and * and : follow ^. Without
+; this an accented letter is not a letter, $ matches inside a word, and rules
+; written for single letters fire in the middle of one -- Spanish "mas" comes
+; out spelled aloud. Members are separated by spaces, which is what lets a
+; class hold the two-character members of @ and &.
+; ---------------------------------------------------------------------------
+
+; #!class # a e i o u y á é í ó ú ü
+; #!class ^ b c d f g h j k l m n ñ p q r s t v w x y z

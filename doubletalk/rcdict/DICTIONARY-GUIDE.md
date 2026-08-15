@@ -168,10 +168,91 @@ Two things to know about regular expressions here:
   synthesizer stall. If a regex rule seems to work sometimes and not others,
   this is the first thing to suspect — simplify it.
 
-### `rule`
+### `rule` — the chip's own exception syntax
 
-Recognised but **not implemented yet**. A `rule` line loads without stopping the
-rest of the file, and is reported and skipped.
+```
+rule	C(O)N	[AA]
+rule	$R(H)
+rule	(5)	[S I NG K O]
+```
+
+This is the syntax the RC8650 datasheet uses for its own exception
+dictionaries: `L(F)R`, read as *"the text fragment F, occurring with left
+context L and right context R, gets this pronunciation."* Only what is inside
+the parentheses is consumed and replaced. The contexts are looked at and left
+alone, so `C(O)N` rewrites just the `o` of `icon`, and the `n` is still there
+for the next rule to see.
+
+The first example gives `o` between `c` and `n` the sound in *cot*. The second
+says an `h` after an initial `r` is silent, as in *rhyme* — no output at all.
+The third is a whole Spanish `5`.
+
+Use it when a pronunciation depends on the letters around it rather than on the
+word, and when you are converting a dictionary RC Systems wrote — those are in
+exactly this form already, one line each.
+
+**Context tokens.** The characters in `L` and `R` are matched literally, except
+for these fifteen:
+
+| | |
+|---|---|
+| `#` | a vowel |
+| `+` | a front vowel: e, i, y |
+| `^` | a consonant |
+| `*` | one or more consonants |
+| `:` | zero or more consonants |
+| `?` | a voiced consonant |
+| `@` | one of d, j, l, n, r, s, t, z, ch, sh, th |
+| `!` | one of b, c, d, f, g, p, t |
+| `%` | a suffix (`-ing`, `-ed`, `-ely`…), followed by a non-letter |
+| `&` | a sibilant: c, g, j, s, x, z, ch, sh |
+| `$` | a nonalphabetic character — a space, a digit, or the edge of the text |
+| `~` | one or more spaces or control characters |
+| `\` | a digit |
+| `\|` | one or more digits, ignoring commas |
+| `` ` `` | any character at all |
+
+Inside the fragment they are all literal except `` ` ``, which is still a
+wildcard there.
+
+A fragment may be empty. `rule` with a pattern of `()` and no output matches
+anything nothing else did and silences it, which is how the datasheet suggests
+ending a dictionary meant to replace the chip's built-in rules entirely.
+
+### Writing rules for another language
+
+Those classes are English. Left as they are, an accented letter is not a letter
+at all — so `$`, which means "not a letter", matches *inside* a word, and rules
+written for single letters start firing in the middle of one. Spanish `más`
+comes out spelled aloud as "e-eme-e a e-ese-e".
+
+So declare the alphabet:
+
+```
+#!class # a e i o u y á é í ó ú ü
+#!class ^ b c d f g h j k l m n ñ p q r s t v w x y z
+#!class + e i y é í
+#!class ? b d g j l m n ñ r v w z
+```
+
+Members are separated by spaces, which is what lets a class hold the
+two-character members of `@` and `&`, or a list of suffixes.
+
+You do not declare `$`, `*` or `:` and cannot: `$` is "not in `#` and not in
+`^`", and `*` and `:` follow `^`. Declaring the two alphabets is enough to make
+all of them right.
+
+A declaration applies to every rule *after* it, and rules keep the classes they
+were loaded under — so two dictionaries for two languages can be loaded at once
+and neither disturbs the other.
+
+### What a rule dictionary costs
+
+A dictionary that covers every letter turns the whole utterance into phonemes.
+That is fine — consecutive rules are joined into a single phoneme span rather
+than one span each — but the text roughly doubles in length, so a piece that
+fitted the chip's input buffer before may not afterwards. Expand first, then
+split. The synthesizer drivers already do this in the right order.
 
 ---
 
@@ -463,6 +544,10 @@ text	Kbps	kilobits per second
 text	(sic)
 ; keep what was captured
 regex	([0-9]+)%	\1 percent
+; the chip's own exception syntax: o between c and n, as in icon
+rule	C(O)N	[AA]
+; h after an initial r is silent, as in rhyme
+rule	$R(H)
 
 ; no tabs available? this means the same as the Mbps line above:
 word Mbps = megabits per second
@@ -473,6 +558,8 @@ word Mbps = megabits per second
 | `word` | whole words only |
 | `text` | any substring |
 | `regex` | regular expression, `\1`–`\9` for the groups, always case-sensitive |
+| `rule` | the chip's `L(F)R` exception syntax; only `F` is replaced |
+| `#!class # …` | redefine a context token's characters, for another language |
 | `i` `c` `C` | ignore capitals / match them exactly / match only all-capitals text |
 | `[ ]` | phonemes |
 | `{ }` | a synthesizer command |

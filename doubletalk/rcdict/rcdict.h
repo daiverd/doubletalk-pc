@@ -49,6 +49,7 @@
  *     word <TAB>   <TAB> Sean <TAB> Shon
  *     word <TAB> C <TAB> US   <TAB> [Y UW EH S]
  *     text <TAB>   <TAB> Mbps <TAB> megabits per second
+ *     rule <TAB>   <TAB> C(O)N <TAB> [AA]
  *
  * A tab cannot appear inside a field, so a pattern may contain spaces, '='
  * and ';' with nothing to escape.  A trailing tab is an empty last column and
@@ -56,6 +57,58 @@
  *
  * Matchers:  word  whole words only, bounded by non-alphanumerics
  *            text  any substring
+ *            rule  the chip's own exception syntax, L(F)R -- "the text
+ *                  fragment F, with left context L and right context R"
+ *
+ * --- the rule matcher ------------------------------------------------------
+ *
+ * This is RC8650 datasheet "Exception Syntax", so RC Systems' own dictionaries
+ * convert to it a line at a time -- the pattern column takes L(F)R verbatim
+ * and the pronunciation goes in the output column as a phoneme span.  Only the
+ * fragment is consumed; the contexts are looked at and not eaten:
+ *
+ *     rule <TAB> <TAB> C(O)N  <TAB> [AA]     o between c and n, as in icon
+ *     rule <TAB> <TAB> $R(H)  <TAB>          h after initial r is silent
+ *     rule <TAB> <TAB> (5)    <TAB> [S I NG K O]        five, in Spanish
+ *
+ * The fifteen Table 22 context tokens all work.  Nine of them are sets of
+ * characters:
+ *
+ *     #  a vowel          ?  a voiced consonant   $  a nonalphabetic character
+ *     +  a front vowel    @  d j l n r s t z ch sh th
+ *     ^  a consonant      !  b c d f g p t        \  a digit
+ *     &  a sibilant       %  a suffix (and then a non-letter)
+ *
+ * and six are structural:  * one or more consonants, : zero or more, ~ one or
+ * more non-printing characters, | one or more digits with commas ignored, and
+ * ` a wildcard, which is the one token that also means something inside a
+ * fragment.  Matching is first-match-wins in load order, and the fragment is
+ * what the scanner steps over -- so, exactly as the datasheet warns, (RAT)
+ * placed before (RATING) means (RATING) is never reached.
+ *
+ * Consecutive rules that both produce phonemes are joined into ONE span.  They
+ * have to be: a dictionary that defines a whole letter-to-sound system matches
+ * every character, and a span per character would be a pair of mode switches
+ * per character.
+ *
+ * --- character classes, per dictionary ------------------------------------
+ *
+ *     #!class # a e i o u y á é í ó ú ü
+ *
+ * Table 22's classes are English, and that is the one part of the rule
+ * language that does not travel.  Members are separated by spaces, so a class
+ * can hold the two-character members the datasheet gives @ and &, and a whole
+ * suffix list.  A declaration replaces the class for every rule loaded after
+ * it, and rules keep the classes they were loaded under -- two dictionaries
+ * with different alphabets can be loaded into one rcdict and each keeps its
+ * own.
+ *
+ * '$' is not declarable and does not need to be: it is "not in # and not in
+ * ^", so declaring the alphabet gets it right for free.  Getting '$' wrong is
+ * not a small mistake -- with the English vowel list an accented letter is not
+ * a letter, so '$' matches in the middle of a word and a letter-naming rule
+ * such as $(m)$ fires there.  Spanish "más" comes out spelled aloud.
+ * '*' and ':' likewise follow '^'.
  *
  * Flags:     i  ignore case (the default)
  *            c  match case exactly

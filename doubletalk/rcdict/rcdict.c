@@ -296,8 +296,259 @@ typedef enum
 {
   M_WORD,
   M_TEXT,
-  M_REGEX
+  M_REGEX,
+  M_RULE
 } match_kind;
+
+/* --- Table 22 context tokens ---------------------------------------------- */
+
+/* The fifteen tokens, in the datasheet's own order, which is also the order of
+   the class table below.  Nine of them are sets of characters and can be
+   redefined per dictionary; the rest are structural and cannot. */
+static const char rc_tokens[] = "#+^*:?@!%&$~\\|`";
+
+#define RC_NTOK  15
+#define RC_HASH  0		/* # a vowel                                  */
+#define RC_PLUS  1		/* + a front vowel                            */
+#define RC_HAT   2		/* ^ a consonant                              */
+#define RC_STAR  3		/* * one or more consonants                   */
+#define RC_COLON 4		/* : zero or more consonants                  */
+#define RC_QUERY 5		/* ? a voiced consonant                       */
+#define RC_AT    6		/* @ one of d j l n r s t z ch sh th          */
+#define RC_BANG  7		/* ! one of b c d f g p t                     */
+#define RC_PCT   8		/* % a suffix                                 */
+#define RC_AMP   9		/* & a sibilant                               */
+#define RC_DOLLAR 10		/* $ a nonalphabetic character                */
+#define RC_TILDE 11		/* ~ one or more non-printing characters      */
+#define RC_BSLASH 12		/* \ a digit                                  */
+#define RC_BAR   13		/* | one or more digits, commas ignored       */
+#define RC_WILD  14		/* ` any character                            */
+
+/* Class members, as a list of NUL-terminated strings ending in an empty one.
+   Strings rather than bytes because three of the classes have two-character
+   members (ch, sh, th) and the suffix class has whole suffixes, and because a
+   redefined class may contain characters outside ASCII -- these are compared
+   as UTF-8, so a member is however many bytes its characters need.
+
+   Table 22's defaults are English, which is the one thing about the rule
+   language that does not travel: the vowels of a Spanish dictionary include
+   the accented ones, and a rule engine that does not know that reads "mas"
+   correctly and spells "mas" out letter by letter.  So they are defaults and
+   not constants -- see rc_class_set and the #!class directive. */
+static const char def_vowel[] = "a\0e\0i\0o\0u\0y\0";
+static const char def_front[] = "e\0i\0y\0";
+static const char def_cons[] =
+  "b\0c\0d\0f\0g\0h\0j\0k\0l\0m\0n\0p\0q\0r\0s\0t\0v\0w\0x\0z\0";
+static const char def_voiced[] = "b\0d\0g\0j\0l\0m\0n\0r\0v\0w\0z\0";
+static const char def_at[] = "d\0j\0l\0n\0r\0s\0t\0z\0ch\0sh\0th\0";
+static const char def_bang[] = "b\0c\0d\0f\0g\0p\0t\0";
+static const char def_amp[] = "c\0g\0j\0s\0x\0z\0ch\0sh\0";
+static const char def_digit[] = "0\0" "1\0" "2\0" "3\0" "4\0" "5\0" "6\0"
+  "7\0" "8\0" "9\0";
+/* Table 22's suffix list.  The parenthesised plurals are spelled out, and the
+   "must also be followed by a non-alphabetic character" part is in the
+   matcher rather than here. */
+static const char def_suffix[] =
+  "ables\0able\0ably\0edly\0eless\0elements\0element\0ements\0ement\0"
+  "eness\0ely\0ers\0er\0ed\0es\0e\0ingly\0ings\0ing\0";
+
+/* Which token each default belongs to; NULL for the structural ones, whose
+   meaning is not a set of characters and so cannot be redefined. */
+static const char *const rc_defaults[RC_NTOK] = {
+  def_vowel, def_front, def_cons, NULL, NULL, def_voiced, def_at, def_bang,
+  def_suffix, def_amp, NULL, NULL, def_digit, NULL, NULL
+};
+
+/* A class table.  Shared between the rules that were loaded under it, and
+   copied on write, so that two dictionaries with different alphabets can be
+   loaded into one rcdict and each keep its own -- which is the whole point of
+   putting the classes in the file rather than in the profile. */
+typedef struct rclasses
+{
+  int refs;			/* -1 on the shared default, never freed */
+  char *set[RC_NTOK];		/* NULL: use rc_defaults[i] */
+} rclasses;
+
+static rclasses rc_default_classes = { -1, { NULL } };
+
+static const char *
+rc_class (const rclasses * c, int tok)
+{
+  if (c && c->set[tok])
+    return c->set[tok];
+  return rc_defaults[tok];
+}
+
+static void
+rc_classes_unref (rclasses * c)
+{
+  int i;
+  if (!c || c->refs < 0)
+    return;
+  if (--c->refs > 0)
+    return;
+  for (i = 0; i < RC_NTOK; i++)
+    free (c->set[i]);
+  free (c);
+}
+
+/* Copy before writing, so rules already loaded keep the table they were
+   compiled against.  Returns NULL only on allocation failure. */
+static rclasses *
+rc_classes_own (rclasses * c)
+{
+  rclasses *n;
+  int i;
+  if (c && c->refs == 1)
+    return c;			/* nobody else is looking at it */
+  n = calloc (1, sizeof *n);
+  if (!n)
+    return NULL;
+  n->refs = 1;
+  for (i = 0; i < RC_NTOK; i++)
+    if (c && c->set[i])
+      {
+	const char *p = c->set[i];
+	size_t len = 0;
+	while (p[len])
+	  len += strlen (p + len) + 1;
+	len++;			/* the terminating empty string */
+	n->set[i] = malloc (len);
+	if (!n->set[i])
+	  {
+	    rc_classes_unref (n);
+	    return NULL;
+	  }
+	memcpy (n->set[i], c->set[i], len);
+      }
+  rc_classes_unref (c);
+  return n;
+}
+
+/* --- UTF-8, only as much of it as the classes need ------------------------ */
+
+/* A dictionary is UTF-8 and the text it rewrites is too, so "the character
+   before the fragment" is not "the byte before the fragment".  Everything here
+   walks characters; nothing decodes further than it has to. */
+static size_t
+uclen (const char *s, size_t avail)
+{
+  unsigned char c = (unsigned char) s[0];
+  size_t n = 1;
+  if (c >= 0xf0)
+    n = 4;
+  else if (c >= 0xe0)
+    n = 3;
+  else if (c >= 0xc0)
+    n = 2;
+  if (n > avail)
+    n = 1;			/* malformed: treat the byte as itself */
+  return n;
+}
+
+/* Start of the character ending at i, not going below lo. */
+static size_t
+uprev (const char *s, size_t lo, size_t i)
+{
+  size_t j = i;
+  while (j > lo && ((unsigned char) s[j - 1] & 0xc0) == 0x80)
+    j--;
+  return j > lo ? j - 1 : lo;
+}
+
+/* Case-fold one character to a comparison key.  ASCII, and the Latin-1
+   supplement, which is as far as a Table 5 target's own character set went and
+   covers every accented letter a Spanish or French dictionary needs.  Anything
+   beyond that compares unfolded rather than wrongly. */
+static unsigned
+fold_cp (const char *s, size_t n)
+{
+  unsigned cp;
+  if (n == 1)
+    cp = (unsigned char) s[0];
+  else if (n == 2)
+    cp = (unsigned) (((unsigned char) s[0] & 0x1f) << 6
+		     | ((unsigned char) s[1] & 0x3f));
+  else if (n == 3)
+    cp = (unsigned) (((unsigned char) s[0] & 0x0f) << 12
+		     | ((unsigned char) s[1] & 0x3f) << 6
+		     | ((unsigned char) s[2] & 0x3f));
+  else
+    return 0xfffd;
+  if (cp >= 'A' && cp <= 'Z')
+    return cp + 32;
+  /* C0-DE are the accented capitals; D7 is the multiplication sign, which is
+     in the middle of them and is not a letter. */
+  if (cp >= 0xc0 && cp <= 0xde && cp != 0xd7)
+    return cp + 32;
+  return cp;
+}
+
+/* Do the len bytes at a equal the NUL-terminated member b, case-folded? */
+static int
+same_chars (const char *a, size_t alen, const char *b)
+{
+  size_t i = 0, j = 0, blen = strlen (b);
+  while (i < alen && j < blen)
+    {
+      size_t na = uclen (a + i, alen - i), nb = uclen (b + j, blen - j);
+      if (fold_cp (a + i, na) != fold_cp (b + j, nb))
+	return 0;
+      i += na;
+      j += nb;
+    }
+  return i == alen && j == blen;
+}
+
+/* Is the character (or characters) at s[0..avail) a member of the token's
+   class?  Returns the number of BYTES matched, or 0 for no.  Longest member
+   wins, which is what makes "ch" beat "c" in the @ and & classes. */
+static size_t
+rc_class_match (const rclasses * c, int tok, const char *s, size_t avail)
+{
+  const char *list = rc_class (c, tok);
+  size_t best = 0, k;
+  if (!list || !avail)
+    return 0;
+  for (; *list; list += strlen (list) + 1)
+    {
+      /* Compare member characters against the input, both folded. */
+      size_t i = 0, j = 0, mlen = strlen (list);
+      while (i < avail && j < mlen)
+	{
+	  size_t na = uclen (s + i, avail - i), nb = uclen (list + j,
+							   mlen - j);
+	  if (fold_cp (s + i, na) != fold_cp (list + j, nb))
+	    break;
+	  i += na;
+	  j += nb;
+	}
+      if (j == mlen && i > best)
+	best = i;
+    }
+  (void) k;
+  return best;
+}
+
+/* A letter is anything in the vowel class or the consonant class, and '$' is
+   anything that is not.  Deriving it means a dictionary that adds the accented
+   vowels to '#' gets '$' right for free -- and getting '$' wrong is not a
+   small mistake: it is what makes a letter-naming rule such as $(m)$ fire in
+   the middle of a word. */
+static int
+rc_is_letter (const rclasses * c, const char *s, size_t avail)
+{
+  return rc_class_match (c, RC_HASH, s, avail) != 0
+    || rc_class_match (c, RC_HAT, s, avail) != 0;
+}
+
+/* One element of a context or fragment: a token, or a literal character. */
+typedef struct
+{
+  unsigned char tok;		/* a Table 22 token, or 0 for a literal */
+  unsigned char len;		/* literal length in bytes */
+  char lit[5];			/* NUL-terminated: a UTF-8 character is <= 4 */
+} ratom;
 
 typedef struct rule
 {
@@ -306,6 +557,13 @@ typedef struct rule
   int caps_only;		/* and require the input to be all capitals */
   char *pat;
   size_t patlen;
+  /* M_RULE only: the compiled L(F)R, and the class table it was compiled
+     against.  left is matched right-to-left from the fragment, right is
+     matched left-to-right from the end of it. */
+  ratom *left, *frag, *right;
+  size_t nleft, nfrag, nright;
+  rclasses *cls;
+  int anypos;			/* fragment has no literal first byte */
   rcdict_regex *re;		/* M_REGEX only; compiled once, at load */
   size_t rseq;			/* ordinal among the regex rules */
   size_t seq;			/* load order, so first-match-wins can be
@@ -317,6 +575,7 @@ typedef struct rule
   size_t line;
   struct rule *next;		/* next rule in the same first-byte bucket */
   struct rule *rnext;		/* next regex rule, in load order */
+  struct rule *anext;		/* next any-position rule, in load order */
 } rule;
 
 struct rcdict
@@ -339,6 +598,17 @@ struct rcdict
   rule *rhead, *rtail;
   size_t nregex;
   int has_regex;
+  /* Rule matchers whose text fragment does not begin with a literal character
+     -- an empty fragment, or one starting with the wildcard -- cannot be
+     bucketed either, for the same reason.  The datasheet's ()= idiom, which
+     ends a dictionary that is meant to replace the built in rules entirely,
+     lands here. */
+  rule *ahead, *atail;
+  int has_anypos;
+  int has_rules;		/* any M_RULE at all: see the lossy_punct note */
+  /* The class table the next rules loaded will compile against.  Rules hold
+     their own reference, so this only ever moves forward. */
+  rclasses *classes;
 };
 
 rcdict *
@@ -348,6 +618,7 @@ rcdict_new (const rcdict_profile *p)
   if (!d)
     return NULL;
   d->profile = p ? p : &rcdict_rc8650;
+  d->classes = &rc_default_classes;
   return d;
 }
 
@@ -362,6 +633,10 @@ free_rule (rule *r)
   free (r->segs);
   free (r->pat);
   free (r->origin);
+  free (r->left);
+  free (r->frag);
+  free (r->right);
+  rc_classes_unref (r->cls);
   rcdict_regex_free (r->re);
   free (r);
 }
@@ -382,6 +657,11 @@ rcdict_clear (rcdict *d)
   d->rhead = d->rtail = NULL;
   d->nregex = 0;
   d->has_regex = 0;
+  d->ahead = d->atail = NULL;
+  d->has_anypos = 0;
+  d->has_rules = 0;
+  rc_classes_unref (d->classes);
+  d->classes = &rc_default_classes;
 }
 
 void
@@ -595,6 +875,422 @@ parse_template (rule *r, const rcdict_profile *p, const char *s, size_t len,
   return 1;
 }
 
+/* --- the rule matcher: L(F)R, RC8650 datasheet "Exception Syntax" --------- */
+
+/* Compile one side of an exception into atoms.  In a context every Table 22
+   token is a token; in the text fragment only the wildcard is, and the
+   datasheet is explicit that any other token there is a literal. */
+static int
+compile_atoms (const char *s, size_t len, int in_fragment,
+	       ratom ** out, size_t *nout)
+{
+  size_t i = 0, n = 0, cap = 0;
+  ratom *a = NULL;
+
+  while (i < len)
+    {
+      size_t cl = uclen (s + i, len - i);
+      ratom one;
+      memset (&one, 0, sizeof one);
+
+      if (cl == 1 && (in_fragment ? s[i] == '`' : strchr (rc_tokens, s[i])
+		      && s[i]))
+	one.tok = (unsigned char) s[i];
+      else
+	{
+	  if (cl > 4)
+	    cl = 1;
+	  one.len = (unsigned char) cl;
+	  memcpy (one.lit, s + i, cl);
+	}
+
+      if (n == cap)
+	{
+	  ratom *na = realloc (a, (cap ? cap * 2 : 8) * sizeof *na);
+	  if (!na)
+	    {
+	      free (a);
+	      return 0;
+	    }
+	  a = na;
+	  cap = cap ? cap * 2 : 8;
+	}
+      a[n++] = one;
+      i += cl;
+    }
+  *out = a;
+  *nout = n;
+  return 1;
+}
+
+/* Split "L(F)R" and compile all three parts.  The fragment runs from the first
+   '(' to the LAST ')', so a rule may pronounce a parenthesis: "(()" is a rule
+   for '(' and "())" one for ')'. */
+static int
+compile_rule (rule *r, const char *pat, size_t len)
+{
+  const char *open = memchr (pat, '(', len), *close = NULL;
+  size_t i;
+
+  if (!open)
+    return 0;
+  for (i = len; i > (size_t) (open - pat); i--)
+    if (pat[i - 1] == ')')
+      {
+	close = pat + i - 1;
+	break;
+      }
+  if (!close)
+    return 0;
+
+  if (!compile_atoms (pat, (size_t) (open - pat), 0, &r->left, &r->nleft))
+    return 0;
+  if (!compile_atoms (open + 1, (size_t) (close - open - 1), 1,
+		      &r->frag, &r->nfrag))
+    return 0;
+  if (!compile_atoms (close + 1, (size_t) (pat + len - close - 1), 0,
+		      &r->right, &r->nright))
+    return 0;
+
+  /* Bucketable only if the fragment starts with a literal character. */
+  r->anypos = !(r->nfrag && r->frag[0].len);
+  return 1;
+}
+
+/* One character of input compared with one literal atom. */
+static int
+atom_is (const rule *r, const ratom * a, const char *s, size_t n)
+{
+  if (!r->nocase)
+    return a->len == n && memcmp (a->lit, s, n) == 0;
+  return same_chars (s, n, a->lit);
+}
+
+static int
+is_nonprinting (unsigned char c)
+{
+  return c < 0x21;
+}
+
+/* Which Table 22 class does this token name?  -1 if it is not one. */
+static int
+tok_class (unsigned char tok)
+{
+  const char *q = tok ? strchr (rc_tokens, tok) : NULL;
+  return q ? (int) (q - rc_tokens) : -1;
+}
+
+/* How many bytes of the class's longest member end at i, looking backwards?
+   Classes may have two-character members (ch, sh, th), so this is not simply
+   the length of the previous character. */
+static size_t
+class_match_back (const rclasses * c, int idx, const char *in, size_t lo,
+		  size_t i)
+{
+  size_t take = 0, back;
+  for (back = 1; back <= 8 && back <= i - lo; back++)
+    if (rc_class_match (c, idx, in + i - back, back) == back)
+      take = back;
+  return take;
+}
+
+/* The context matchers recurse rather than loop, because the variable-width
+   tokens have to be able to give a character back: "(a)*x" wants the run of
+   consonants to stop one short of the x, and a greedy pass that never
+   reconsidered would eat the x -- x being a consonant -- and then fail,
+   silently, for as long as the dictionary lived.
+
+   The budget is the same idea as the regex engine's: a pattern with several
+   variable-width tokens in it can in principle be made to explode, and a
+   dictionary must not be able to make a screen reader go quiet.  Contexts are
+   a handful of atoms long in practice, so nothing real comes near it. */
+#define RC_CTX_BUDGET 4000
+
+static int
+ctx_right (const rule *r, const char *in, size_t i, size_t end, size_t k,
+	   int *budget)
+{
+  const rclasses *c = r->cls;
+  const ratom *a;
+  size_t avail, cl;
+
+  if (k == r->nright)
+    return 1;
+  if (--*budget < 0)
+    return 0;
+
+  a = &r->right[k];
+  avail = end - i;
+
+  switch (a->tok)
+    {
+    case 0:			/* a literal character */
+      if (!avail)
+	return 0;
+      cl = uclen (in + i, avail);
+      if (!atom_is (r, a, in + i, cl))
+	return 0;
+      return ctx_right (r, in, i + cl, end, k + 1, budget);
+
+    case '$':			/* a nonalphabetic character, or the end */
+      if (!avail)
+	return ctx_right (r, in, i, end, k + 1, budget);
+      if (rc_is_letter (c, in + i, avail))
+	return 0;
+      return ctx_right (r, in, i + uclen (in + i, avail), end, k + 1, budget);
+
+    case '`':			/* wildcard */
+      if (!avail)
+	return 0;
+      return ctx_right (r, in, i + uclen (in + i, avail), end, k + 1, budget);
+
+    case '*':			/* one or more consonants */
+    case ':':			/* zero or more */
+      {
+	size_t stops[64], n = 0, j = i;
+	stops[n++] = j;		/* having taken none */
+	while (n < sizeof stops / sizeof *stops && j < end
+	       && (cl = rc_class_match (c, RC_HAT, in + j, end - j)) != 0)
+	  stops[n++] = j += cl;
+	/* Longest first, which is what makes the common case one step. */
+	while (n-- > (a->tok == '*' ? 1u : 0u))
+	  if (ctx_right (r, in, stops[n], end, k + 1, budget))
+	    return 1;
+	return 0;
+      }
+
+    case '~':			/* one or more non-printing characters */
+      {
+	size_t j = i, n = 0;
+	while (j < end && is_nonprinting ((unsigned char) in[j]))
+	  {
+	    j++;
+	    n++;
+	  }
+	for (; n; n--)
+	  if (ctx_right (r, in, i + n, end, k + 1, budget))
+	    return 1;
+	return 0;
+      }
+
+    case '|':			/* one or more digits; commas are ignored */
+      {
+	size_t stops[64], n = 0, j = i, digits = 0;
+	while (n < sizeof stops / sizeof *stops && j < end)
+	  {
+	    if (in[j] == ',')
+	      {
+		j++;
+		continue;
+	      }
+	    cl = rc_class_match (c, RC_BSLASH, in + j, end - j);
+	    if (!cl)
+	      break;
+	    j += cl;
+	    digits++;
+	    stops[n++] = j;
+	  }
+	(void) digits;
+	while (n--)
+	  if (ctx_right (r, in, stops[n], end, k + 1, budget))
+	    return 1;
+	return 0;
+      }
+
+    case '%':			/* a suffix, and then a nonalphabetic */
+      {
+	const char *list = rc_class (c, RC_PCT);
+	for (; list && *list; list += strlen (list) + 1)
+	  {
+	    size_t mlen = strlen (list);
+	    if (mlen > avail || !same_chars (in + i, mlen, list))
+	      continue;
+	    if (i + mlen < end && rc_is_letter (c, in + i + mlen,
+					        end - i - mlen))
+	      continue;		/* Table 22: and then a non-letter */
+	    if (ctx_right (r, in, i + mlen, end, k + 1, budget))
+	      return 1;
+	  }
+	return 0;
+      }
+
+    default:			/* a character class */
+      {
+	int idx = tok_class (a->tok);
+	if (idx < 0 || !avail)
+	  return 0;
+	cl = rc_class_match (c, idx, in + i, avail);
+	if (!cl)
+	  return 0;
+	return ctx_right (r, in, i + cl, end, k + 1, budget);
+      }
+    }
+}
+
+/* The same atoms, matched right-to-left from the fragment.  Separate from
+   ctx_right rather than one function with a direction flag: every step of it
+   differs, and a UTF-8 character is walked backwards by a different means
+   than forwards. */
+static int
+ctx_left (const rule *r, const char *in, size_t lo, size_t i, size_t k,
+	  int *budget)
+{
+  const rclasses *c = r->cls;
+  const ratom *a;
+  size_t avail, ps;
+
+  if (!k)
+    return 1;
+  if (--*budget < 0)
+    return 0;
+
+  a = &r->left[k - 1];
+  avail = i - lo;
+
+  switch (a->tok)
+    {
+    case 0:
+      if (!avail)
+	return 0;
+      ps = uprev (in, lo, i);
+      if (!atom_is (r, a, in + ps, i - ps))
+	return 0;
+      return ctx_left (r, in, lo, ps, k - 1, budget);
+
+    case '$':
+      if (!avail)		/* the start of the run is nonalphabetic */
+	return ctx_left (r, in, lo, i, k - 1, budget);
+      ps = uprev (in, lo, i);
+      if (rc_is_letter (c, in + ps, i - ps))
+	return 0;
+      return ctx_left (r, in, lo, ps, k - 1, budget);
+
+    case '`':
+      if (!avail)
+	return 0;
+      return ctx_left (r, in, lo, uprev (in, lo, i), k - 1, budget);
+
+    case '*':
+    case ':':
+      {
+	size_t stops[64], n = 0, j = i, take;
+	stops[n++] = j;
+	while (n < sizeof stops / sizeof *stops && j > lo
+	       && (take = class_match_back (c, RC_HAT, in, lo, j)) != 0)
+	  stops[n++] = j -= take;
+	while (n-- > (a->tok == '*' ? 1u : 0u))
+	  if (ctx_left (r, in, lo, stops[n], k - 1, budget))
+	    return 1;
+	return 0;
+      }
+
+    case '~':
+      {
+	size_t j = i, n = 0;
+	while (j > lo && is_nonprinting ((unsigned char) in[j - 1]))
+	  {
+	    j--;
+	    n++;
+	  }
+	for (; n; n--)
+	  if (ctx_left (r, in, lo, i - n, k - 1, budget))
+	    return 1;
+	return 0;
+      }
+
+    case '|':
+      {
+	size_t stops[64], n = 0, j = i, take;
+	while (n < sizeof stops / sizeof *stops && j > lo)
+	  {
+	    if (in[j - 1] == ',')
+	      {
+		j--;
+		continue;
+	      }
+	    take = class_match_back (c, RC_BSLASH, in, lo, j);
+	    if (!take)
+	      break;
+	    j -= take;
+	    stops[n++] = j;
+	  }
+	while (n--)
+	  if (ctx_left (r, in, lo, stops[n], k - 1, budget))
+	    return 1;
+	return 0;
+      }
+
+    case '%':
+      {
+	/* The suffix ends where the fragment begins, so the "and then a
+	   non-letter" half of Table 22's definition is about the fragment and
+	   is left to the fragment. */
+	const char *list = rc_class (c, RC_PCT);
+	for (; list && *list; list += strlen (list) + 1)
+	  {
+	    size_t mlen = strlen (list);
+	    if (mlen > avail || !same_chars (in + i - mlen, mlen, list))
+	      continue;
+	    if (ctx_left (r, in, lo, i - mlen, k - 1, budget))
+	      return 1;
+	  }
+	return 0;
+      }
+
+    default:
+      {
+	int idx = tok_class (a->tok);
+	size_t take;
+	if (idx < 0 || !avail)
+	  return 0;
+	take = class_match_back (c, idx, in, lo, i);
+	if (!take)
+	  return 0;
+	return ctx_left (r, in, lo, i - take, k - 1, budget);
+      }
+    }
+}
+
+/* The whole exception at in[i].  Sets *mlen to the fragment's length in bytes
+   -- which is what the scanner consumes; the contexts are only looked at. */
+static int
+match_rule_at (const rule *r, const char *in, size_t lo, size_t i,
+	       size_t end, size_t *mlen)
+{
+  size_t j = i, k;
+
+  for (k = 0; k < r->nfrag; k++)
+    {
+      const ratom *a = &r->frag[k];
+      size_t cl;
+      if (j >= end)
+	return 0;
+      cl = uclen (in + j, end - j);
+      if (a->tok == '`')	/* the wildcard is legal inside a fragment */
+	j += cl;
+      else if (atom_is (r, a, in + j, cl))
+	j += cl;
+      else
+	return 0;
+    }
+
+  if (r->nleft)
+    {
+      int budget = RC_CTX_BUDGET;
+      if (!ctx_left (r, in, lo, i, r->nleft, &budget))
+	return 0;
+    }
+  if (r->nright)
+    {
+      int budget = RC_CTX_BUDGET;
+      if (!ctx_right (r, in, j, end, 0, &budget))
+	return 0;
+    }
+
+  *mlen = j - i;
+  return 1;
+}
+
 static int
 add_rule (rcdict *d, rule *r)
 {
@@ -610,6 +1306,8 @@ add_rule (rcdict *d, rule *r)
     }
   r->seq = d->n;
   d->rules[d->n++] = r;
+  if (r->kind == M_RULE)
+    d->has_rules = 1;
 
   if (r->kind == M_REGEX)
     {
@@ -623,7 +1321,21 @@ add_rule (rcdict *d, rule *r)
       return 1;
     }
 
-  b = (unsigned char) r->pat[0];
+  if (r->kind == M_RULE && r->anypos)
+    {
+      if (d->atail)
+	d->atail->anext = r;
+      else
+	d->ahead = r;
+      d->atail = r;
+      d->has_anypos = 1;
+      return 1;
+    }
+
+  /* An exception is bucketed by the first byte of its TEXT FRAGMENT, not of
+     the pattern -- "$(e)r^" is reached from an e in the input, not from a
+     dollar sign. */
+  b = (unsigned char) (r->kind == M_RULE ? r->frag[0].lit[0] : r->pat[0]);
   if (b >= 'A' && b <= 'Z')
     b = (unsigned char) (b + 32);
   if (d->tail[b])
@@ -721,6 +1433,87 @@ rcdict_add_text (rcdict *d, const char *src, size_t len, const char *name,
 	  else if (alen >= 4 && !memcmp (a, "lang", 4))
 	    {
 	      /* Recorded by convention, not yet acted on. */
+	    }
+	  else if (alen > 5 && !memcmp (a, "class", 5)
+		   && is_space ((unsigned char) a[5]))
+	    {
+	      /* #!class <token> <member> <member> ...
+	       *
+	       * Redefines one Table 22 character class for every rule loaded
+	       * after it.  Members are separated by spaces so that a class can
+	       * hold the two-character ones the datasheet gives @ and & -- and
+	       * so that a suffix class is writable at all.
+	       *
+	       * This is what makes the rule language usable outside English.
+	       * Table 22's own vowel list is "aeiouy", and a Spanish
+	       * dictionary that inherits it does not merely misplace a stress:
+	       * an accented letter falls out of the alphabet altogether, so $
+	       * matches inside a word and the rules meant for single letters
+	       * start firing.  "mas" comes out spelled aloud. */
+	      const char *v = a + 5;
+	      size_t vlen = alen - 5;
+	      const char *tokp;
+	      trim (&v, &vlen);
+	      if (!vlen || !(tokp = strchr (rc_tokens, v[0])) || !v[0])
+		report_line (report, ctx, off, name, line,
+			     "#!class wants a Table 22 token "
+			     "(one of #+^*:?@!%&$~\\|`) and its members");
+	      else if (!rc_defaults[tokp - rc_tokens])
+		report_line (report, ctx, off, name, line,
+			     "that class is structural and cannot be "
+			     "redefined; $ follows # and ^, and * and : "
+			     "follow ^");
+	      else
+		{
+		  size_t idx = (size_t) (tokp - rc_tokens);
+		  const char *m = v + 1;
+		  size_t mlen = vlen - 1, w = 0;
+		  char *set;
+		  trim (&m, &mlen);
+		  /* The member list, rewritten as NUL-separated strings with
+		     an empty one on the end. */
+		  set = malloc (mlen + 2);
+		  if (!set)
+		    return added;
+		  {
+		    size_t q = 0;
+		    while (q < mlen)
+		      {
+			size_t s0;
+			while (q < mlen && is_space ((unsigned char) m[q]))
+			  q++;
+			s0 = q;
+			while (q < mlen && !is_space ((unsigned char) m[q]))
+			  q++;
+			if (q > s0)
+			  {
+			    memcpy (set + w, m + s0, q - s0);
+			    w += q - s0;
+			    set[w++] = 0;
+			  }
+		      }
+		    set[w] = 0;
+		  }
+		  if (!w)
+		    {
+		      free (set);
+		      report_line (report, ctx, off, name, line,
+				   "#!class with no members; a class may not "
+				   "be empty");
+		    }
+		  else
+		    {
+		      rclasses *nc = rc_classes_own (d->classes);
+		      if (!nc)
+			{
+			  free (set);
+			  return added;
+			}
+		      d->classes = nc;
+		      free (nc->set[idx]);
+		      nc->set[idx] = set;
+		    }
+		}
 	    }
 	  else
 	    report_line (report, ctx, off, name, line, "unknown directive");
@@ -859,12 +1652,7 @@ rcdict_add_text (rcdict *d, const char *src, size_t len, const char *name,
 	else if (tlen == 5 && !memcmp (t, "regex", 5))
 	  kind = M_REGEX;
 	else if (tlen == 4 && !memcmp (t, "rule", 4))
-	  {
-	    report_line (report, ctx, off, name, line,
-			 "the rule matcher is not implemented yet, "
-			 "rule skipped");
-	    continue;
-	  }
+	  kind = M_RULE;
 	else
 	  {
 	    report_line (report, ctx, off, name, line,
@@ -962,6 +1750,22 @@ rcdict_add_text (rcdict *d, const char *src, size_t len, const char *name,
 			 "pattern, output)");
 	    continue;
 	  }
+	if (kind == M_RULE)
+	  {
+	    if (!compile_rule (r, r->pat, r->patlen))
+	      {
+		free_rule (r);
+		report_line (report, ctx, off, name, line,
+			     "a rule wants the datasheet's L(F)R form, with "
+			     "the text fragment in parentheses -- e.g. "
+			     "$(e)r^ or (ch)");
+		continue;
+	      }
+	    r->cls = d->classes;
+	    if (r->cls->refs >= 0)
+	      r->cls->refs++;
+	  }
+
 	if (kind == M_REGEX)
 	  {
 	    /* Remimu has no case-insensitive mode, and lowercasing a pattern
@@ -1135,7 +1939,7 @@ ends_with_article (const char *in, size_t ws, size_t we, size_t *word_start)
 static void
 emit_span (sink * out, const rcdict_options *opt,
 	   const char *inner, size_t innerlen,
-	   int absorb_article, int pause_char)
+	   int absorb_article, int pause_char, int continuing)
 {
   const rcdict_profile *p = opt->profile;
   size_t s = 0, e = innerlen;
@@ -1145,7 +1949,15 @@ emit_span (sink * out, const rcdict_options *opt,
   while (e > s && is_space ((unsigned char) inner[e - 1]))
     e--;
 
-  puts_ (out, p->enter_phoneme);
+  /* Continuing the span that is already open: take back the " <CTRL+A>T" that
+     closed it instead of closing and reopening.  A letter-to-sound dictionary
+     matches every character of every word, so without this the RCStudio
+     Spanish sample produces 572 one-phoneme spans where it wants about ten,
+     each paying for two mode switches. */
+  if (continuing)
+    unput (out, strlen (p->leave_phoneme) + 1);
+  else
+    puts_ (out, p->enter_phoneme);
   if (absorb_article)
     puts_ (out, " AX");
   if (e > s)
@@ -1215,6 +2027,17 @@ match_at (const rcdict *d, const char *in, size_t run_start, size_t i,
 
   for (r = d->head[b]; r; r = r->next)
     {
+      if (r->kind == M_RULE)
+	{
+	  size_t n = 0;
+	  if (!match_rule_at (r, in, run_start, i, run_end, &n) || !n)
+	    continue;
+	  if (r->caps_only && !all_capitals (in + i, n))
+	    continue;
+	  best = r;
+	  *mlen = n;
+	  break;
+	}
       if (r->patlen > run_end - i)
 	continue;
       if (!same (in + i, r->pat, r->patlen, r->nocase))
@@ -1295,6 +2118,31 @@ match_at (const rcdict *d, const char *in, size_t run_start, size_t i,
 	break;
       }
 
+  /* Exceptions whose fragment has no literal first character are not in any
+     bucket and are tried everywhere, settled against the others by load order
+     exactly as the regex rules are. */
+  if (d->has_anypos)
+    for (r = d->ahead; r; r = r->anext)
+      {
+	size_t n = 0;
+	if (best && r->seq > best->seq)
+	  break;
+	if (!match_rule_at (r, in, run_start, i, run_end, &n))
+	  continue;
+	/* A null text fragment matches without consuming anything, and the
+	   scanner cannot stand still.  It takes one character instead, which
+	   is the only reading under which the datasheet's own "()=" -- placed
+	   last so that unmatched characters are ignored rather than falling
+	   through to the built in rules -- does what it says. */
+	if (!n)
+	  n = uclen (in + i, run_end - i);
+	if (r->caps_only && !all_capitals (in + i, n))
+	  continue;
+	best = r;
+	*mlen = n;
+	break;
+      }
+
   if (best && caps)
     {
       caps[0].start = i;	/* \\0 is always the whole match */
@@ -1314,16 +2162,23 @@ static void
 emit_rule (sink * out, const rcdict_options *opt, const rule *r,
 	   const char *in, size_t run_start, size_t mstart, size_t mend,
 	   size_t run_end, const rcap *caps, size_t *consumed_to,
+	   int *span_open, int may_continue,
 	   rcdict_report report, void *ctx)
 {
   const rcdict_profile *p = opt->profile;
   size_t k;
   int absorb = 0, pause = 0;
   size_t article_at = 0;
+  /* Does this output pick up a span the previous match left open? */
+  int cont = may_continue && span_open && *span_open
+    && r->nsegs && r->segs[0].kind == SEG_PHONEME;
 
   *consumed_to = mend;
 
-  if (r->nsegs && r->segs[0].kind == SEG_PHONEME
+  /* Absorbing the article ahead of the span is about the span's LEFT EDGE
+     breaking the letter-to-sound context, and there is no such edge when the
+     span was already open. */
+  if (!cont && r->nsegs && r->segs[0].kind == SEG_PHONEME
       && ends_with_article (in, run_start, mstart, &article_at))
     {
       absorb = 1;
@@ -1340,7 +2195,12 @@ emit_rule (sink * out, const rcdict_options *opt, const rule *r,
 	  pause = (unsigned char) in[k2];
 	  *consumed_to = k2 + 1;
 	}
-      else if (k2 < run_end && lossy_punct ((unsigned char) in[k2]))
+      else if (k2 < run_end && lossy_punct ((unsigned char) in[k2])
+	       && !(opt->dict && opt->dict->has_rules))
+	/* Not warned about when the dictionary has exception rules in it: one
+	   of those covers every character by construction, punctuation
+	   included, so the '?' about to be complained of is on its way to a
+	   pause phoneme of the dictionary's own choosing. */
 	report_at (report, ctx, k2,
 		   "span ends before ! ? ; or : which has no Table 5 pause "
 		   "phoneme: the rising terminal is lost");
@@ -1356,7 +2216,8 @@ emit_rule (sink * out, const rcdict_options *opt, const rule *r,
 	  break;
 	case SEG_PHONEME:
 	  emit_span (out, opt, sg->s, sg->len,
-		     absorb && k == 0, k == r->nsegs - 1 ? pause : 0);
+		     absorb && k == 0, k == r->nsegs - 1 ? pause : 0,
+		     cont && k == 0);
 	  break;
 	case SEG_COMMAND:
 	  putc_ (out, (char) p->cmd_char);
@@ -1374,6 +2235,17 @@ emit_rule (sink * out, const rcdict_options *opt, const rule *r,
 	  break;
 	}
     }
+
+  /* A rule with no output at all -- the silent (h)= of a Spanish dictionary --
+     emits nothing, so whatever the span was doing it is still doing.
+
+     An absorbed pause does not close the span either.  What Experiment 1
+     measured is that the punctuation must be INSIDE the span (C3/C4), and it
+     still is; and a dictionary whose own rules cover punctuation reaches the
+     same place by the other path, "(,)=," matching and coalescing.  The two
+     paths agreeing matters more than the caution would have bought. */
+  if (span_open && r->nsegs)
+    *span_open = r->segs[r->nsegs - 1].kind == SEG_PHONEME;
 }
 
 /* --- the scanner ---------------------------------------------------------- */
@@ -1450,6 +2322,11 @@ expand_run (sink * out, const rcdict_options *opt, const char *in,
   char stackbuf[1024];
   char *runz = NULL;
   const rcdict *dict = opt->dict;
+  /* Whether the output currently ends in an open phoneme span, and the input
+     offset at which it was left open.  Consecutive matches that both produce
+     phonemes with nothing between them are joined into one span. */
+  int span_open = 0;
+  size_t span_at = start;
 
   if (dict && dict->has_regex && end > start)
     {
@@ -1507,7 +2384,9 @@ expand_run (sink * out, const rcdict_options *opt, const char *in,
 	  tmp.nsegs = 1;
 
 	  emit_rule (out, opt, &tmp, in, start, i, endq + closelen, end,
-		     NULL, &consumed, report, ctx);
+		     NULL, &consumed, &span_open, span_open && span_at == i,
+		     report, ctx);
+	  span_at = consumed;
 	  i = consumed;
 	  continue;
 	}
@@ -1529,12 +2408,16 @@ expand_run (sink * out, const rcdict_options *opt, const char *in,
 	    {
 	      size_t consumed;
 	      emit_rule (out, opt, r, in, start, i, i + mlen, end, caps,
-			 &consumed, report, ctx);
+			 &consumed, &span_open, span_open && span_at == i,
+			 report, ctx);
+	      span_at = consumed;
 	      i = consumed;
 	      continue;
 	    }
 	}
 
+      /* Anything passed through as text closes the span. */
+      span_open = 0;
       putc_ (out, in[i]);
       i++;
     }
