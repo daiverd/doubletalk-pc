@@ -507,7 +507,7 @@ static size_t
 rc_class_match (const rclasses * c, int tok, const char *s, size_t avail)
 {
   const char *list = rc_class (c, tok);
-  size_t best = 0, k;
+  size_t best = 0;
   if (!list || !avail)
     return 0;
   for (; *list; list += strlen (list) + 1)
@@ -526,7 +526,6 @@ rc_class_match (const rclasses * c, int tok, const char *s, size_t avail)
       if (j == mlen && i > best)
 	best = i;
     }
-  (void) k;
   return best;
 }
 
@@ -1075,7 +1074,7 @@ ctx_right (const rule *r, const char *in, size_t i, size_t end, size_t k,
 
     case '|':			/* one or more digits; commas are ignored */
       {
-	size_t stops[64], n = 0, j = i, digits = 0;
+	size_t stops[64], n = 0, j = i;
 	while (n < sizeof stops / sizeof *stops && j < end)
 	  {
 	    if (in[j] == ',')
@@ -1087,10 +1086,8 @@ ctx_right (const rule *r, const char *in, size_t i, size_t end, size_t k,
 	    if (!cl)
 	      break;
 	    j += cl;
-	    digits++;
-	    stops[n++] = j;
+	    stops[n++] = j;	/* one stop per digit: '|' needs at least one */
 	  }
-	(void) digits;
 	while (n--)
 	  if (ctx_right (r, in, stops[n], end, k + 1, budget))
 	    return 1;
