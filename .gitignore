@@ -21,3 +21,6 @@ docs/*.zip
 *.obj
 *.exe
 __pycache__/
+
+# macOS
+.DS_Store

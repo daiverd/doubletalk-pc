@@ -16,6 +16,11 @@
 #                        distributed with the add-on). Supply your own dump;
 #                        verify CRC32 66685631 / SHA1
 #                        bf7e78d6381c76d291ee069971873347a314ffff.
+#
+# Pronunciation dictionaries are read where the user keeps them - the paths in
+# NVDA's configuration, plus whatever is in <nvda config>/doubletalkpc/ - and
+# arranged from the "DoubleTalk PC dictionaries" category in NVDA's Settings.
+# See dictfiles.py for the load-order rule and rcdict/rcdict.h for the format.
 
 import ctypes
 # Unmaps the DLL on terminate - ctypes itself never does, so without this each
@@ -106,6 +111,36 @@ class _DtalkDLL:
 		self.lib.dtalk_read_index_marks.restype = ctypes.c_size_t
 		self.lib.dtalk_read_index_marks.argtypes = [
 			ctypes.c_void_p, ctypes.POINTER(_DtalkIndexMark), ctypes.c_size_t]
+		# Pronunciation dictionary. The rules live in rcdict, a BSD-3 module
+		# mirrored verbatim from upstream, but its own symbols are not in the
+		# DLL's export table - dtalk.h marks its entry points dllexport, which
+		# turns off mingw's export-everything default - so the DLL re-exports
+		# the four construction calls as dtalk_dict_*. They also settle the
+		# profile, so there is nothing to get wrong from here.
+		#
+		# Guarded because a DLL from before this existed is a real possibility
+		# (an add-on packaged with a stale one; a hand-copied dtalk.dll), and
+		# looking up a missing export raises. Speech without dictionaries is a
+		# reasonable synth; no synth at all is not.
+		self.has_dictionary = False
+		try:
+			self.lib.dtalk_dict_new.restype = ctypes.c_void_p
+			self.lib.dtalk_dict_new.argtypes = []
+			self.lib.dtalk_dict_free.argtypes = [ctypes.c_void_p]
+			self.lib.dtalk_dict_add_file.restype = ctypes.c_int
+			self.lib.dtalk_dict_add_file.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+			self.lib.dtalk_dict_rule_count.restype = ctypes.c_size_t
+			self.lib.dtalk_dict_rule_count.argtypes = [ctypes.c_void_p]
+			self.lib.dtalk_set_dictionary.argtypes = [
+				ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+			self.lib.dtalk_expand.restype = ctypes.c_size_t
+			self.lib.dtalk_expand.argtypes = [
+				ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
+				ctypes.c_char_p, ctypes.c_size_t]
+			self.has_dictionary = True
+		except AttributeError:
+			log.warning("doubletalkpc: %s has no dictionary support; "
+				"pronunciation dictionaries will be ignored" % _dllName())
 
 		# Unload again if the ROM is missing or bad: this is the one failure
 		# every user without a firmware dump hits, and it is retried on every
@@ -307,6 +342,15 @@ class SynthDriver(SynthDriver):
 		self._nextMark = 0
 		self._queue = queue.Queue()
 		self._stopping = threading.Event()
+		# The pronunciation dictionary, borrowed by the card instance and freed
+		# in terminate(). None until something is loaded, which is the common
+		# case and the one that costs nothing.
+		self._dict = None
+		# The "[[K AE T]]" escape in ordinary text. Off, and it must stay off by
+		# default: "[[" is wiki link syntax, and a screen-reader user reading a
+		# wiki must not lose text to it.
+		self._inlinePhonemes = False
+		self._loadDictionaries()
 		self._thread = threading.Thread(target=self._synthLoop, daemon=True)
 		self._thread.start()
 
@@ -325,7 +369,109 @@ class SynthDriver(SynthDriver):
 		if not unload:
 			log.warning("Synthesis thread still running; leaving dtalk DLL loaded")
 		with self._libLock:
+			# The card instance borrows the dictionary, so detach it before it
+			# is freed. Skipped along with the unload when the synthesis thread
+			# outlived its join: it may still be inside the DLL, and a freed
+			# dictionary under a live handle is worse than a leaked one.
+			if self._dict and unload:
+				try:
+					self._dt.lib.dtalk_set_dictionary(self._dt.handle, None, 0)
+					self._dt.lib.dtalk_dict_free(self._dict)
+				except Exception:
+					log.exception("doubletalkpc: freeing the dictionary failed")
+				self._dict = None
 			self._dt.close(unload=unload)
+
+	# --- pronunciation dictionaries ------------------------------------------
+
+	def _loadDictionaries(self):
+		"""(Re)load the user's dictionary files into the card instance.
+
+		Files and load order come from dictfiles; rules are first-match-wins in
+		that order, so the file at the top of the list wins. Format and a worked
+		example: rcdict/rcdict.h and rcdict/example.dict.
+
+		Returns (rules, files) for a caller that wants to report what happened.
+		(0, 0) is a perfectly good answer and means there are none; None means
+		the attempt did not get far enough to say. Deliberately quiet either
+		way: having no dictionaries is the normal case, and every failure path
+		here leaves the synth speaking exactly as it did before dictionaries
+		existed. A dictionary must never be the reason a screen reader goes
+		silent.
+		"""
+		if not self._dt.has_dictionary:
+			return None
+		try:
+			from . import dictfiles
+			paths = dictfiles.orderedPaths()
+		except Exception:
+			log.exception("doubletalkpc: could not look for dictionaries")
+			return None
+
+		lib = self._dt.lib
+		new = None
+		total = 0
+		if paths or self._inlinePhonemes:
+			try:
+				new = lib.dtalk_dict_new()
+				for path in paths:
+					try:
+						# The card's own char* path, so the ANSI code page - the
+						# same encoding its fopen will decode it with.
+						total += lib.dtalk_dict_add_file(new, path.encode("mbcs"))
+					except Exception:
+						log.exception("doubletalkpc: could not load %s" % path)
+			except Exception:
+				log.exception("doubletalkpc: building the dictionary failed")
+				new = None
+
+		# Attach the new one before freeing the old, so there is no moment at
+		# which the card holds a dangling pointer - even though both this and
+		# _expand run on NVDA's main thread and cannot overlap today.
+		old, self._dict = self._dict, new
+		try:
+			with self._libLock:
+				lib.dtalk_set_dictionary(
+					self._dt.handle, new, 1 if self._inlinePhonemes else 0)
+		except Exception:
+			log.exception("doubletalkpc: attaching the dictionary failed")
+		if old:
+			try:
+				lib.dtalk_dict_free(old)
+			except Exception:
+				log.exception("doubletalkpc: freeing the old dictionary failed")
+		if new is not None:
+			log.info("doubletalkpc: loaded %d dictionary rules from %d file(s)"
+				% (total, len(paths)))
+		return (total, len(paths) if new is not None else 0)
+
+	def reloadDictionaries(self):
+		"""Re-read the dictionary files, for the settings panel.
+
+		This is what makes editing a .dict file a matter of saving it rather
+		than restarting the synthesizer.
+		"""
+		return self._loadDictionaries()
+
+	def _expand(self, text):
+		"""Run the pronunciation dictionary over one utterance's bytes.
+
+		Returns the text unchanged when nothing is loaded, which is the common
+		case, and on any failure.
+		"""
+		if not self._dict and not self._inlinePhonemes:
+			return text
+		try:
+			lib, h = self._dt.lib, self._dt.handle
+			need = lib.dtalk_expand(h, text, len(text), None, 0)
+			if need <= 0:
+				return text
+			buf = ctypes.create_string_buffer(need + 1)
+			lib.dtalk_expand(h, text, len(text), buf, need + 1)
+			return buf.raw[:need]
+		except Exception:
+			log.exception("doubletalkpc: dictionary expansion failed")
+			return text
 
 	def _clampSavedSettings(self):
 		# Settings saved by add-on <= 0.1.9 can hold slider values below
@@ -632,8 +778,20 @@ class SynthDriver(SynthDriver):
 				else:
 					eff = min(100, max(0, self._pitch + offset))
 					parts.append("\x01%dP" % self._mapPitch(eff))
+		# Nothing is spoken until the CR arrives.
 		parts.append("\r")
-		self._queue.put("".join(parts).encode("ascii", "replace"))
+		# The dictionary is applied HERE, not in dtalk_say: this driver queues
+		# its own bytes with dtalk_queue, which is the raw path, so a
+		# substitution made any further down would never happen for NVDA.
+		#
+		# It runs over the finished utterance, commands and all, because rcdict
+		# tokenizes the Ctrl-A commands as opaque atoms and will not match into
+		# or across one - so an index marker planted between two words cannot be
+		# swallowed by a rule, and a rule cannot corrupt a command into
+		# something the card would execute. The trailing CR is an utterance
+		# boundary to it, which matching never crosses either.
+		text = "".join(parts).encode("ascii", "replace")
+		self._queue.put(self._expand(text))
 
 	def cancel(self):
 		self._stopping.set()

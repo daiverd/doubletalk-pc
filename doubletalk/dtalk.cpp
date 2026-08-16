@@ -6,6 +6,7 @@
 #include "dtalk.h"
 
 #include "doubletalk_board.h"
+#include "rcdict/rcdict.h"
 
 #include <cmath>
 #include <deque>
@@ -224,6 +225,7 @@ struct dtalk
 	u64 samples_dropped = 0;           // grid samples pulled/carried but never delivered (dtalk_stop)
 	s64 idle_stable = 0;               // consecutive idle cycles observed
 	int rate_boost = 0;                // current boost level (0 = authentic)
+	rcdict_options dict{};             // pronunciation rules; profile always set
 	u16 rate_orig[RATE_REGION_HI - RATE_REGION_LO + 1]; // pristine period words
 	bool rate_saved = false;
 
@@ -352,6 +354,7 @@ extern "C" {
 dtalk *dtalk_create(const void *rom, size_t rom_size)
 {
 	dtalk *dt = new dtalk;
+	rcdict_options_init(&dt->dict, &rcdict_doubletalk_pc);
 	if (!dt->board.load_rom(static_cast<const u8 *>(rom), rom_size))
 	{
 		delete dt;
@@ -417,10 +420,75 @@ void dtalk_queue(dtalk *dt, const void *bytes, size_t len)
 	dt->idle_stable = 0;
 }
 
+/* --- pronunciation dictionary ---------------------------------------------
+ *
+ * rcdict/ is mirrored verbatim from upstream and must not be edited here; it
+ * is BSD-3-Clause and depends on nothing but libc, which is what lets the same
+ * sources serve more than one engine. All that happens here is that dtalk_say
+ * runs its text through the rules first.
+ *
+ * The RC8650 datasheet's Table 5 is captioned "DoubleTalk Phoneme Symbols", so
+ * the phoneme set, the Table 6 modifiers, the D/T/C mode commands, the Ctrl-A
+ * command character and the nI index markers are the same on this card; what
+ * differs is carried by rcdict_doubletalk_pc.
+ */
+
+void dtalk_set_dictionary(dtalk *dt, const rcdict *d, int inline_phonemes)
+{
+	if (!dt) return;
+	dt->dict.dict = d;                 // borrowed; the caller keeps ownership
+	dt->dict.inline_phonemes = inline_phonemes ? 1 : 0;
+}
+
+size_t dtalk_expand(dtalk *dt, const char *in, size_t inlen,
+                    char *out, size_t outcap)
+{
+	if (!dt || !in) return 0;
+	return rcdict_expand(&dt->dict, in, inlen, out, outcap, nullptr, nullptr);
+}
+
+/* Construction, re-exported for the DLL. See the comment in dtalk.h for why
+ * these exist at all -- nothing here is more than a forwarding call. */
+
+rcdict *dtalk_dict_new(void)
+{
+	return rcdict_new(&rcdict_doubletalk_pc);
+}
+
+void dtalk_dict_free(rcdict *d)
+{
+	rcdict_free(d);
+}
+
+int dtalk_dict_add_file(rcdict *d, const char *path)
+{
+	if (!d || !path) return 0;
+	return rcdict_add_file(d, path, nullptr, nullptr);
+}
+
+size_t dtalk_dict_rule_count(const rcdict *d)
+{
+	return d ? rcdict_rule_count(d) : 0;
+}
+
 void dtalk_say(dtalk *dt, const char *text)
 {
-	dtalk_queue(dt, text, std::strlen(text));
+	const size_t len = std::strlen(text);
 	const u8 cr = 0x0d;
+
+	// No dictionary and no escape is the common case, and stays allocation
+	// free.
+	if (!dt->dict.dict && !dt->dict.inline_phonemes) {
+		dtalk_queue(dt, text, len);
+		dtalk_queue(dt, &cr, 1);
+		return;
+	}
+
+	const size_t need = rcdict_expand(&dt->dict, text, len, nullptr, 0,
+	                                  nullptr, nullptr);
+	std::vector<char> buf(need + 1);
+	rcdict_expand(&dt->dict, text, len, buf.data(), need + 1, nullptr, nullptr);
+	dtalk_queue(dt, buf.data(), need);
 	dtalk_queue(dt, &cr, 1);
 }
 
