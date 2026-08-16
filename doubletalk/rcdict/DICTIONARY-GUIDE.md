@@ -246,6 +246,44 @@ A declaration applies to every rule *after* it, and rules keep the classes they
 were loaded under — so two dictionaries for two languages can be loaded at once
 and neither disturbs the other.
 
+### Converting a dictionary RC Systems wrote
+
+If you have one of their `.dic` files — the ones RCStudio edits, and the samples
+that ship with it — you do not have to retype it. `dic2rcdict.py`, in this same
+directory, converts one:
+
+```
+python3 dic2rcdict.py Spanish.dic -o spanish.dict
+```
+
+It reports what it did on stderr: how many rules it wrote, how many were
+silent, and any line it could not read. Nothing is written silently — a line
+that is not an exception, or a pronunciation using something that is not a
+phoneme, is named with its line number and left out rather than guessed at.
+
+The rules themselves come across unchanged; `L(F)R` is `L(F)R` in both. What the
+converter does is the surrounding work:
+
+- **The encoding.** RC Systems' files are ISO-8859-1, dictionaries here are
+  UTF-8. Use `-e` if yours is something else.
+- **The pronunciations** are wrapped in the `[ ]` of a phoneme span, and checked
+  a symbol at a time against the phoneme table.
+- **The alphabet.** `--lang es` writes the Spanish `#!class` declarations above
+  before the rules. It is the default, because Spanish is the sample everyone
+  has; `--lang en` writes none, which is right for English. For any other
+  language it says it has none to write, and you add your own — the section
+  above is what to write.
+- **Character mode.** A `.dic` file may have a second half, after a line
+  containing just `C`, for how the chip should read letters out one at a time.
+  There is no character mode here, and the text-mode rules already name every
+  letter, so that half is dropped and counted. `--char-mode keep` folds it in
+  with the rest if you want to look at it.
+
+The result is an ordinary dictionary file. Edit it, reorder it, put your own
+rules above it — but if you edit the `.dic` and convert again, whatever you
+changed here goes. Keep your own additions in a separate file loaded before it;
+that is what load order is for.
+
 ### What a rule dictionary costs
 
 A dictionary that covers every letter turns the whole utterance into phonemes.
